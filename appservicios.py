@@ -31,7 +31,7 @@ with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
             clientes = st.text_input("Cliente")
             usuario = st.text_input("Usuario")
             modulo = st.selectbox("Módulo", ["Accesos", "Administracion", "Contabilidad", "Compras", "Ventas", "Logistica", "Eccomerce", "Mails", "Programa", "Produccion","Servidor", "Web", "Gerencial", "RRHH", "Sucursal", "Otros"])
-            online = st.checkbox("¿Es consulta Online?")
+            online = st.checkbox("¿Se resolvió Online?")
 
         with col3:
             fe_consult = st.date_input("Fecha Consulta", datetime.now())
