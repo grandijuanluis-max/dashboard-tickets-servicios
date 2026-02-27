@@ -13,17 +13,14 @@ st.title("📋 Sistema de Gestión de Consultas y Tickets")
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Inicializar el estado del buscador si no existe
 if "input_busqueda" not in st.session_state:
     st.session_state.input_busqueda = ""
 
-# Función para leer datos sin caché y limpiar nulos
 def obtener_datos():
     df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
     df.columns = df.columns.str.strip()
     return df.fillna("")
 
-# Función mejorada para limpiar el historial de "nan"
 def formato_historial(valor):
     v = str(valor).strip()
     if v == "" or v.lower() == "nan" or v == "None":
@@ -38,7 +35,6 @@ except Exception as e:
     st.error(f"Error al conectar con la base de datos: {e}")
     df_actual = pd.DataFrame()
 
-# AGREGAMOS KEY A LAS TABS PARA EVITAR EL SALTO
 tab1, tab2 = st.tabs(["➕ Nuevo Ticket", "✏️ Modificar Ticket Pendiente"])
 
 # ==========================================
@@ -91,8 +87,8 @@ with tab1:
                 "ATENCION": atencion.upper(),
                 "CLIENTES": clientes.upper(),
                 "USUARIO": usuario.upper(),
-                "FE_CONSULT": str(fe_consult),
-                "FE_RTA": str(fe_rta),
+                "FE_CONSULT": fe_consult.strftime('%d/%m/%Y'), # Formato dd/mm/año
+                "FE_RTA": fe_rta.strftime('%d/%m/%Y'),       # Formato dd/mm/año
                 "MODULO": modulo.upper(),
                 "CONSULTAS": consultas,
                 "RESPUESTAS": respuestas,
@@ -100,7 +96,7 @@ with tab1:
                 "ONLINE": "SI" if online else "NO",
                 "ANIO": int(fe_consult.year),
                 "MES": int(fe_consult.month),
-                "ULTIMA_MODIF": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "ULTIMA_MODIF": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                 "MODIFICADO_POR": usuario_pc
             }])
             try:
@@ -112,18 +108,16 @@ with tab1:
                 st.error(f"❌ Error: {e}")
 
 # ==========================================
-# TAB 2: MODIFICAR TICKET (Corrección de Salto y Filtro)
+# TAB 2: MODIFICAR TICKET
 # ==========================================
 with tab2:
     st.subheader("Búsqueda y Edición de Tickets")
     
     if not df_actual.empty:
-        # Filtramos los pendientes
         df_actual["ESTADO_UP"] = df_actual["ESTADO"].str.upper()
         pendientes = df_actual[df_actual["ESTADO_UP"].isin(["ABIERTO", "EN PROCESO"])].copy()
         
         if not pendientes.empty:
-            # BUSCADOR CON RESET AUTOMÁTICO AL GUARDAR
             busqueda = st.text_input("🔍 Buscar por nombre de Cliente:", placeholder="Escribe para filtrar...", key="input_busqueda")
             
             if busqueda:
@@ -140,11 +134,9 @@ with tab2:
                 fila_idx = df_actual.index[pd.to_numeric(df_actual["ID_TICKET"], errors='coerce') == id_sel].tolist()[0]
                 d = df_actual.loc[fila_idx]
 
-                # HISTORIAL SIN "nan"
                 st.warning(f"🕒 **Última modificación:** el {formato_historial(d['ULTIMA_MODIF'])} por: **{formato_historial(d['MODIFICADO_POR'])}**")
 
-                # FORMULARIO DE EDICIÓN: Bloquea el "Enter"
-                with st.form("form_edicion_estricto"):
+                with st.form("form_edicion_final"):
                     st.markdown(f"### 🔒 Editando Ticket **#{id_sel}**")
                     ce1, ce2, ce3 = st.columns(3)
                     
@@ -162,8 +154,9 @@ with tab2:
                         st.text_input("Módulo", value=d["MODULO"], disabled=True)
 
                     with ce3:
+                        # Lectura de fecha en formato dd/mm/año
                         try:
-                            f_rta_dt = datetime.strptime(str(d["FE_RTA"]), '%Y-%m-%d')
+                            f_rta_dt = datetime.strptime(str(d["FE_RTA"]), '%d/%m/%Y')
                         except:
                             f_rta_dt = datetime.now()
                         
@@ -174,7 +167,6 @@ with tab2:
                     st.text_area("Detalle de la Consulta", value=d["CONSULTAS"], disabled=True)
                     nueva_rta = st.text_area("Detalle de la Respuesta (Editable) *", value=d["RESPUESTAS"])
 
-                    # BOTÓN QUE REQUIERE CLIC FÍSICO
                     guardar_cambios = st.form_submit_button("💾 GUARDAR CAMBIOS EN TICKET")
 
                 if guardar_cambios:
@@ -183,25 +175,21 @@ with tab2:
                     else:
                         try:
                             df_actual.at[fila_idx, "ESTADO"] = nuevo_estado.upper()
-                            df_actual.at[fila_idx, "FE_RTA"] = str(nueva_fe_rta)
+                            df_actual.at[fila_idx, "FE_RTA"] = nueva_fe_rta.strftime('%d/%m/%Y')
                             df_actual.at[fila_idx, "TIEMPO_RES"] = nuevo_tiempo
                             df_actual.at[fila_idx, "RESPUESTAS"] = nueva_rta
-                            df_actual.at[fila_idx, "ULTIMA_MODIF"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            df_actual.at[fila_idx, "ULTIMA_MODIF"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
                             df_actual.at[fila_idx, "MODIFICADO_POR"] = usuario_pc
                             
-                            # Limpiar columnas temporales y subir
                             df_final_subir = df_actual.drop(columns=["ESTADO_UP", "ID_NUM"], errors="ignore")
                             conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_final_subir)
                             
-                            # RESET DEL BUSCADOR ANTES DE RECARGAR
                             st.session_state.input_busqueda = "" 
-                            st.success("✅ Ticket actualizado. Filtro borrado.")
+                            st.success("✅ Ticket actualizado correctamente. Formato de fecha aplicado.")
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Error al actualizar: {e}")
             else:
-                st.info("No se encontraron resultados para esa búsqueda.")
+                st.info("No hay resultados para esa búsqueda.")
         else:
             st.info("No hay tickets pendientes.")
-    else:
-        st.warning("La base de datos está vacía.")
