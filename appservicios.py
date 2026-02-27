@@ -12,7 +12,7 @@ st.title("📋 Sistema de Gestión de Consultas y Tickets")
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 2. FUNCIÓN PARA LEER DATOS SIN CACHÉ (Fundamental para el ID)
+# 2. FUNCIÓN PARA LEER DATOS SIN CACHÉ (Fundamental para el ID y Modificaciones)
 def obtener_datos():
     # ttl=0 obliga a la app a leer los datos reales de Google Sheets cada vez
     df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
@@ -20,7 +20,7 @@ def obtener_datos():
     df.columns = df.columns.str.strip()
     return df
 
-# Intentamos obtener los datos actuales
+# Intentamos obtener los datos actuales al cargar la página
 try:
     df_actual = obtener_datos()
 except Exception as e:
@@ -31,12 +31,11 @@ except Exception as e:
 tab1, tab2 = st.tabs(["➕ Nuevo Ticket", "✏️ Modificar Ticket Pendiente"])
 
 # ==========================================
-# TAB 1: CARGA DE NUEVO TICKET (ID CORREGIDO)
+# TAB 1: CARGA DE NUEVO TICKET
 # ==========================================
 with tab1:
-    # Lógica de ID Robusta: Buscamos el valor más alto real
+    # Lógica de ID Robusta
     if not df_actual.empty and "ID_TICKET" in df_actual.columns:
-        # Convertimos la columna ID a números, ignorando errores (letras o vacíos)
         ids_numericos = pd.to_numeric(df_actual["ID_TICKET"], errors='coerce').dropna()
         if not ids_numericos.empty:
             proximo_id = int(ids_numericos.max()) + 1
@@ -76,6 +75,7 @@ with tab1:
         enviar = st.form_submit_button("Guardar Registro")
 
     if enviar:
+        # Aquí se graban el Año y el Mes automáticamente de la fecha de consulta
         df_nuevo = pd.DataFrame([{
             "ID_TICKET": proximo_id,
             "CONSULTOR": consultor,
@@ -92,19 +92,19 @@ with tab1:
             "RESPUESTAS": respuestas,
             "TIEMPO_RES": tiempo_res,
             "ONLINE": "SI" if online else "NO",
-            "ANIO": fe_consult.year,
-            "MES": fe_consult.month
+            "ANIO": int(fe_consult.year),
+            "MES": int(fe_consult.month)
         }])
 
         try:
-            # Re-leemos justo antes de guardar para evitar colisiones
+            # Re-leemos justo antes de guardar para evitar pisar datos de otros usuarios
             df_final = pd.concat([obtener_datos(), df_nuevo], ignore_index=True)
             conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_final)
             st.balloons()
             st.success(f"✅ Ticket #{proximo_id} guardado. Año: {fe_consult.year}, Mes: {fe_consult.month}")
-            st.rerun() # Reinicia la app para actualizar el contador
+            st.rerun() 
         except Exception as e:
-            st.error(f"❌ Error: {e}")
+            st.error(f"❌ Error al guardar: {e}")
 
 # ==========================================
 # TAB 2: MODIFICAR TICKET (PENDIENTES)
@@ -117,35 +117,47 @@ with tab2:
         pendientes = df_actual[df_actual["ESTADO"].isin(["Abierto", "En Proceso"])]
         
         if not pendientes.empty:
+            # Lista desplegable para elegir el ticket
             opciones = pendientes.apply(lambda x: f"ID: {x['ID_TICKET']} - {x['CLIENTES']}", axis=1).tolist()
-            seleccion = st.selectbox("Ticket a editar:", opciones)
+            seleccion = st.selectbox("Selecciona el ticket para actualizar:", opciones)
             
+            # Extraer el ID real
             id_sel = int(seleccion.split(" - ")[0].replace("ID: ", ""))
+            # Buscar la fila exacta en el dataframe
             fila_idx = df_actual.index[df_actual["ID_TICKET"].astype(int) == id_sel].tolist()[0]
-            datos = df_actual.loc[fila_idx]
+            datos_viejos = df_actual.loc[fila_idx]
 
             with st.form("edit_form"):
                 st.info(f"Editando Ticket ID: {id_sel}")
                 col_e1, col_e2 = st.columns(2)
                 with col_e1:
-                    nuevo_estado = st.selectbox("Estado", ["Abierto", "En Proceso", "Cerrado"], 
-                                                index=["Abierto", "En Proceso", "Cerrado"].index(datos["ESTADO"]))
+                    nuevo_estado = st.selectbox("Nuevo Estado", ["Abierto", "En Proceso", "Cerrado"], 
+                                                index=["Abierto", "En Proceso", "Cerrado"].index(datos_viejos["ESTADO"]))
+                    nueva_prioridad = st.select_slider("Nueva Prioridad", options=["Baja", "Media", "Alta"],
+                                                       value=datos_viejos["PRIORIDAD"])
                 with col_e2:
-                    nuevo_tiempo = st.number_input("Tiempo Total", value=int(datos["TIEMPO_RES"]))
+                    nueva_fecha_rta = st.date_input("Nueva Fecha Respuesta", datetime.now())
+                    nuevo_tiempo = st.number_input("Tiempo Total (horas/min)", value=int(datos_viejos["TIEMPO_RES"]))
                 
-                nueva_rta = st.text_area("Detalle Respuesta", value=datos["RESPUESTAS"])
-                boton_upd = st.form_submit_button("Actualizar Ticket")
+                nueva_respuesta_det = st.text_area("Actualizar Detalle de Respuesta", value=datos_viejos["RESPUESTAS"])
+                boton_upd = st.form_submit_button("Guardar Cambios en Ticket")
 
             if boton_upd:
                 try:
+                    # Actualizamos los valores en el dataframe actual
                     df_actual.at[fila_idx, "ESTADO"] = nuevo_estado
+                    df_actual.at[idx, "PRIORIDAD"] = nueva_prioridad
+                    df_actual.at[fila_idx, "FE_RTA"] = str(nueva_fecha_rta)
                     df_actual.at[fila_idx, "TIEMPO_RES"] = nuevo_tiempo
-                    df_actual.at[fila_idx, "RESPUESTAS"] = nueva_rta
+                    df_actual.at[fila_idx, "RESPUESTAS"] = nueva_respuesta_det
                     
+                    # Subimos la hoja completa actualizada
                     conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual)
-                    st.success(f"✅ Ticket #{id_sel} actualizado.")
+                    st.success(f"✅ Ticket #{id_sel} actualizado correctamente.")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"❌ Error: {e}")
+                    st.error(f"❌ Error al actualizar: {e}")
         else:
-            st.info("No hay tickets pendientes.")
+            st.info("No hay tickets pendientes (Abiertos o En Proceso) para modificar.")
+    else:
+        st.warning("La base de datos está vacía.")
