@@ -9,20 +9,20 @@ from fpdf import FPDF
 # Configuración de la página
 st.set_page_config(page_title="Gestión de Tickets", layout="wide")
 
-# 1. Conexión y Control de Estado de Navegación
+# 1. Conexión y Control de Estado
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# MEMORIA DE NAVEGACIÓN: Mantiene la solapa abierta pase lo que pase
 if "menu_activo" not in st.session_state:
     st.session_state.menu_activo = "➕ NUEVO"
+if "db_estandarizada" not in st.session_state:
+    st.session_state.db_estandarizada = False
 
 def obtener_datos():
     df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
     df.columns = df.columns.str.strip()
     return df.fillna("")
 
-# Función para formatear fechas a dd/mm/aaaa de forma segura
 def limpiar_fecha(f):
     if not f or str(f).lower() == "nan" or str(f).strip() == "": return ""
     try:
@@ -39,22 +39,20 @@ except Exception as e:
     df_actual = pd.DataFrame()
 
 # ==========================================
-# MENÚ DE NAVEGACIÓN ESTABLE (Botones de Solapa)
+# MENÚ DE NAVEGACIÓN
 # ==========================================
-st.markdown("### 🖥️ Panel de Control Operativo")
+st.markdown("### 🖥️ Panel de Control")
 cols = st.columns(4)
 if cols[0].button("➕ NUEVO TICKET", use_container_width=True): st.session_state.menu_activo = "➕ NUEVO"
 if cols[1].button("✏️ MODIFICAR TICKET", use_container_width=True): st.session_state.menu_activo = "✏️ MODIFICAR"
 if cols[2].button("🔍 CONSULTAR TICKETS", use_container_width=True): st.session_state.menu_activo = "🔍 CONSULTAR"
 if cols[3].button("📊 REPORTES", use_container_width=True): st.session_state.menu_activo = "📊 REPORTES"
 
-st.markdown(f"📍 Estás en: **{st.session_state.menu_activo}**")
 st.divider()
 
 # ==========================================
-# LÓGICA DE SECCIONES
+# SECCIÓN: NUEVO TICKET
 # ==========================================
-
 if st.session_state.menu_activo == "➕ NUEVO":
     if not df_actual.empty and "ID_TICKET" in df_actual.columns:
         ids_num = pd.to_numeric(df_actual["ID_TICKET"], errors='coerce').dropna()
@@ -100,13 +98,15 @@ if st.session_state.menu_activo == "➕ NUEVO":
                 st.balloons()
                 st.rerun()
 
+# ==========================================
+# SECCIÓN: MODIFICAR
+# ==========================================
 elif st.session_state.menu_activo == "✏️ MODIFICAR":
     if not df_actual.empty:
         pend = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
         if not pend.empty:
-            busq_m = st.text_input("🔍 Buscar Cliente:", placeholder="Filtra la lista de abajo...")
+            busq_m = st.text_input("🔍 Buscar Cliente:")
             if busq_m: pend = pend[pend["CLIENTES"].str.contains(busq_m, case=False)]
-            
             pend["ID_NUM"] = pd.to_numeric(pend["ID_TICKET"], errors='coerce')
             pend = pend.sort_values(by=["CLIENTES", "ID_NUM"])
             
@@ -116,11 +116,11 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
             idx_m = df_actual.index[pd.to_numeric(df_actual["ID_TICKET"], errors='coerce') == id_m].tolist()[0]
             dm = df_actual.loc[idx_m]
 
-            with st.form("form_edit_manual"):
-                st.warning(f"🕒 Última Modificación: {dm['ULTIMA_MODIF']} por {dm['MODIFICADO_POR']}")
+            with st.form("form_edit"):
+                st.warning(f"🕒 Modificado: {dm['ULTIMA_MODIF']} por {dm['MODIFICADO_POR']}")
                 ce1, ce2 = st.columns(2)
                 with ce1:
-                    est_m = st.selectbox("Estado", ["ABIERTO", "EN PROCESO", "CERRADO"])
+                    est_m = st.selectbox("Nuevo Estado", ["ABIERTO", "EN PROCESO", "CERRADO"])
                     t_m = st.number_input("Tiempo (min)", value=int(float(dm["TIEMPO_RES"] if dm["TIEMPO_RES"]!="" else 0)))
                 with ce2:
                     fe_r_m = st.date_input("F. Respuesta", datetime.now())
@@ -134,25 +134,28 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                     df_actual.at[idx_m, "ULTIMA_MODIF"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
                     df_actual.at[idx_m, "MODIFICADO_POR"] = usuario_pc
                     conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual)
-                    st.success("✅ Ticket actualizado.")
                     st.rerun()
 
+# ==========================================
+# SECCIÓN: CONSULTAR (CON REPORTE PDF COMPLETO)
+# ==========================================
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
-    # 🧼 BOTÓN DE LIMPIEZA MASIVA PARA DATOS HISTÓRICOS
-    st.info("💡 Si ves datos raros o fechas mal escritas de cargas viejas, usa este botón:")
-    if st.button("🧹 ESTANDARIZAR TODA LA BASE (Corregir nan, Mayúsculas y Fechas)"):
-        with st.spinner("Limpiando y organizando datos históricos..."):
-            df_l = df_actual.copy()
-            textos = ["CONSULTOR", "TIPO_CONS", "PRIORIDAD", "ESTADO", "ATENCION", "CLIENTES", "USUARIO", "MODULO"]
-            fechas = ["FE_CONSULT", "FE_RTA"]
-            for c in textos:
-                if c in df_l.columns: df_l[c] = df_l[c].astype(str).str.upper().str.strip().replace("NAN", "")
-            for c in fechas:
-                if c in df_l.columns: df_l[c] = df_l[c].apply(limpiar_fecha)
-            conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_l)
-            st.success("✅ ¡Base de datos impecable! Se han normalizado todos los registros.")
-            st.rerun()
+    # LÓGICA DEL BOTÓN DE ESTANDARIZACIÓN
+    if not st.session_state.db_estandarizada:
+        if st.button("🧹 ESTANDARIZAR BASE DE DATOS (Una sola vez)"):
+            with st.spinner("Normalizando registros históricos..."):
+                df_l = df_actual.copy()
+                textos = ["CONSULTOR", "TIPO_CONS", "PRIORIDAD", "ESTADO", "ATENCION", "CLIENTES", "USUARIO", "MODULO"]
+                for c in textos:
+                    if c in df_l.columns: df_l[c] = df_l[c].astype(str).str.upper().str.strip().replace("NAN", "")
+                for c in ["FE_CONSULT", "FE_RTA"]:
+                    if c in df_l.columns: df_l[c] = df_l[c].apply(limpiar_fecha)
+                conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_l)
+                st.session_state.db_estandarizada = True
+                st.success("✅ ¡Base de datos corregida! El botón desaparecerá ahora.")
+                st.rerun()
 
+    st.header("🔍 Consulta General")
     if not df_actual.empty:
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -164,7 +167,6 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
         df_f = df_actual.copy()
         if f_cli != "TODOS": df_f = df_f[df_f["CLIENTES"] == f_cli]
         
-        # Comparación de fechas segura
         df_f['FECHA_DT'] = pd.to_datetime(df_f['FE_CONSULT'], dayfirst=True, errors='coerce').dt.date
         df_f = df_f.dropna(subset=['FECHA_DT'])
         df_f = df_f[(df_f['FECHA_DT'] >= f_d) & (df_f['FECHA_DT'] <= f_h)]
@@ -173,28 +175,60 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
             df_f["ID_NUM"] = pd.to_numeric(df_f["ID_TICKET"], errors='coerce')
             df_f = df_f.sort_values(by=["CLIENTES", "ID_NUM"])
             op_c = df_f.apply(lambda r: f"#{int(r['ID_NUM'])} | {r['CLIENTES']} | {r['FE_CONSULT']}", axis=1).tolist()
-            sel_c = st.selectbox("Selecciona Ticket p/ ver Ficha:", op_c)
+            sel_c = st.selectbox("Selecciona Ticket:", op_c)
             id_c = int(sel_c.split(" | ")[0].replace("#", ""))
             dc = df_f[df_f["ID_NUM"] == id_c].iloc[0]
             
+            # --- VISTA EN PANTALLA (Inclusión de Tiempo y Usuario) ---
             with st.container(border=True):
                 st.subheader(f"🔍 Ficha Ticket #{id_c}")
-                v1, v2 = st.columns(2)
+                v1, v2, v3 = st.columns(3)
                 with v1:
-                    st.text_input("Consultor ", value=dc["CONSULTOR"], disabled=True)
-                    st.text_area("Consulta ", value=dc["CONSULTAS"], disabled=True)
+                    st.text_input("Atendido por (Consultor)", value=dc["CONSULTOR"], disabled=True)
+                    st.text_input("Estado", value=dc["ESTADO"], disabled=True)
                 with v2:
-                    st.text_input("Estado ", value=dc["ESTADO"], disabled=True)
-                    st.text_area("Respuesta ", value=dc["RESPUESTAS"], disabled=True)
+                    st.text_input("Cliente", value=dc["CLIENTES"], disabled=True)
+                    st.text_input("Usuario Registrado", value=dc["USUARIO"], disabled=True)
+                with v3:
+                    st.text_input("Fecha Consulta", value=dc["FE_CONSULT"], disabled=True)
+                    st.text_input("Tiempo de Resolución (min)", value=str(dc["TIEMPO_RES"]), disabled=True)
                 
+                st.text_area("Detalle de la Consulta", value=dc["CONSULTAS"], disabled=True)
+                st.text_area("Detalle de la Respuesta", value=dc["RESPUESTAS"], disabled=True)
+                
+                # --- GENERACIÓN DE PDF COMPLETO ---
                 pdf = FPDF()
-                pdf.add_page(); pdf.set_font("Arial", 'B', 14)
-                pdf.cell(200, 10, txt=f"TICKET #{id_c}", ln=True, align='C')
-                st.download_button("📥 Descargar PDF", pdf.output(dest='S').encode('latin-1'), f"Ticket_{id_c}.pdf")
+                pdf.add_page()
+                pdf.set_font("Arial", 'B', 16)
+                pdf.cell(200, 10, txt=f"REPORTE DE TICKET #{id_c}", ln=True, align='C')
+                pdf.ln(10)
+                
+                pdf.set_font("Arial", 'B', 12)
+                pdf.cell(0, 10, txt=f"QUIEN LO ATENDIO: {dc['CONSULTOR']}", ln=True)
+                pdf.cell(0, 10, txt=f"CLIENTE: {dc['CLIENTES']}", ln=True)
+                pdf.cell(0, 10, txt=f"USUARIO: {dc['USUARIO']}", ln=True)
+                pdf.cell(0, 10, txt=f"FECHA DE CONSULTA: {dc['FE_CONSULT']}", ln=True)
+                pdf.cell(0, 10, txt=f"ESTADO: {dc['ESTADO']}", ln=True)
+                pdf.cell(0, 10, txt=f"TIEMPO DE RESOLUCION: {dc['TIEMPO_RES']} minutos", ln=True)
+                pdf.ln(5)
+                
+                pdf.set_font("Arial", 'B', 12)
+                pdf.cell(0, 10, txt="DETALLE DE LA CONSULTA:", ln=True)
+                pdf.set_font("Arial", size=11)
+                pdf.multi_cell(0, 8, txt=str(dc["CONSULTAS"]))
+                pdf.ln(5)
+                
+                pdf.set_font("Arial", 'B', 12)
+                pdf.cell(0, 10, txt="RESPUESTA:", ln=True)
+                pdf.set_font("Arial", size=11)
+                pdf.multi_cell(0, 8, txt=str(dc["RESPUESTAS"]))
+                
+                st.download_button("📥 Descargar PDF Completo", pdf.output(dest='S').encode('latin-1'), f"Reporte_Ticket_{id_c}.pdf")
         else: st.info("No hay tickets en este rango.")
 
-else: # Sección de Reportes
-    st.header("📊 Reportes de Tiempo por Cliente")
+# --- SECCIÓN: REPORTES ---
+else:
+    st.header("📊 Reportes de Tiempo")
     if not df_actual.empty:
         c_r = st.selectbox("Elegir Cliente:", sorted(df_actual["CLIENTES"].unique()))
         df_r = df_actual[df_actual["CLIENTES"] == c_r].copy()
@@ -203,4 +237,3 @@ else: # Sección de Reportes
         st.table(res)
         tot = res["TIEMPO_RES"].sum()
         st.metric("Acumulado", f"{tot} min", f"{tot/60:.2f} hs")
-        st.latex(r"Horas = \frac{\sum Minutos}{60}")
