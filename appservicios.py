@@ -6,7 +6,7 @@ from datetime import datetime
 st.set_page_config(page_title="Sistema de Tickets - Servicios", layout="wide")
 
 # URL de tu Google Sheets (Recuerda que debe estar en "Cualquier persona con el enlace")
-url = "TU_URL_DE_GOOGLE_SHEETS_AQUI"
+url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/edit?gid=0#gid=0"
 
 # Establecemos la conexión
 conn = st.connection("gsheets", type=GSheetsConnection)
