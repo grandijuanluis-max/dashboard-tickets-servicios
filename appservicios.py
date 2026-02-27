@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 
 # Configuración de la página
-st.set_page_config(page_title="Registro de Tickets", layout="centered")
+st.set_page_config(page_title="Registro de Tickets", layout="wide")
 
 st.title("📋 Registro de Consultas y Tickets")
 
@@ -12,7 +12,6 @@ st.title("📋 Registro de Consultas y Tickets")
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 
 # 2. Crear la conexión
-# Asegúrate de que en Secrets pusiste [connections.gsheets]
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # 3. Diagnóstico de Conexión
@@ -21,7 +20,7 @@ if conn._service_account_info is not None:
 else:
     st.error("⚠️ No se detectaron las credenciales. Revisa los Secrets en Streamlit Cloud.")
 
-# 4. # --- FORMULARIO DE INGRESO ---
+# 4. --- FORMULARIO DE INGRESO ---
 with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
     with st.form("ticket_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
@@ -52,8 +51,8 @@ with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
         enviar = st.form_submit_button("Guardar Registro")
 
     if enviar:
-        # Registro a insertar
-        nuevo_registro = {
+        # 1. Crear el DataFrame con el nuevo registro
+        df_nuevo = pd.DataFrame([{
             "ID_TICKET": id_ticket,
             "CONSULTOR": consultor,
             "TIPO_CONS": tipo_cons,
@@ -71,15 +70,20 @@ with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
             "ONLINE": "SI" if online else "NO",
             "ANIO": fe_consult.year,
             "MES": fe_consult.month
-        }
-            try:
-                # Leer datos existentes
-                df_existente = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios")
-                # Combinar
-                df_actualizado = pd.concat([df_existente, nuevo_ticket], ignore_index=True)
-                # Guardar
-                conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actualizado)
-                st.balloons()
-                st.success("✅ ¡Ticket guardado correctamente en Google Sheets!")
-            except Exception as e:
-                st.error(f"❌ Error al guardar: {e}")
+        }])
+
+        try:
+            # 2. Leer datos existentes
+            df_existente = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios")
+            
+            # 3. Combinar datos nuevos con existentes
+            df_actualizado = pd.concat([df_existente, df_nuevo], ignore_index=True)
+            
+            # 4. Guardar en Google Sheets
+            conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actualizado)
+            
+            st.balloons()
+            st.success("✅ ¡Ticket guardado correctamente en la hoja BD_Dashboard_Servicios!")
+            
+        except Exception as e:
+            st.error(f"❌ Error al guardar: {e}")
