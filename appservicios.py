@@ -3,7 +3,7 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
-# Configuración de la página
+# Configuración de la página - Debe ser la primera instrucción de Streamlit
 st.set_page_config(page_title="Registro de Tickets", layout="wide")
 
 st.title("📋 Registro de Consultas y Tickets")
@@ -50,6 +50,7 @@ with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
 
         enviar = st.form_submit_button("Guardar Registro")
 
+    # Lógica que se ejecuta al presionar el botón
     if enviar:
         # 1. Crear el DataFrame con el nuevo registro
         df_nuevo = pd.DataFrame([{
@@ -83,7 +84,7 @@ with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
             conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actualizado)
             
             st.balloons()
-            st.success("✅ ¡Ticket guardado correctamente en la hoja BD_Dashboard_Servicios!")
+            st.success("✅ ¡Ticket guardado correctamente en la hoja!")
             
         except Exception as e:
             st.error(f"❌ Error al guardar: {e}")
