@@ -2,6 +2,7 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
+import getpass 
 
 # Configuración de la página
 st.set_page_config(page_title="Gestión de Tickets", layout="wide")
@@ -16,6 +17,9 @@ def obtener_datos():
     df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
     df.columns = df.columns.str.strip()
     return df
+
+# Obtener el nombre del usuario de la computadora
+usuario_pc = getpass.getuser().upper()
 
 try:
     df_actual = obtener_datos()
@@ -79,9 +83,10 @@ with tab1:
             "TIEMPO_RES": tiempo_res,
             "ONLINE": "SI" if online else "NO",
             "ANIO": int(fe_consult.year),
-            "MES": int(fe_consult.month)
+            "MES": int(fe_consult.month),
+            "ULTIMA_MODIF": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "MODIFICADO_POR": usuario_pc
         }])
-
         try:
             df_final = pd.concat([obtener_datos(), df_nuevo], ignore_index=True)
             conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_final)
@@ -92,88 +97,91 @@ with tab1:
             st.error(f"❌ Error al guardar: {e}")
 
 # ==========================================
-# TAB 2: MODIFICAR TICKET (Buscador Avanzado)
+# TAB 2: MODIFICAR TICKET (Con Buscador de Cliente)
 # ==========================================
 with tab2:
     st.subheader("Búsqueda y Edición de Tickets")
     
     if not df_actual.empty:
-        # Filtramos los que están abiertos o en proceso
-        pendientes = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])]
+        # 1. Filtramos los pendientes
+        pendientes = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
         
         if not pendientes.empty:
-            # Creamos una etiqueta detallada: ID | Cliente | Usuario | Primer renglón de consulta
-            def crear_etiqueta(row):
-                primer_renglon = str(row['CONSULTAS']).split('\n')[0][:50] # Primeros 50 caracteres del primer renglón
-                return f"#{int(float(row['ID_TICKET']))} | {row['CLIENTES']} | {row['USUARIO']} | Obs: {primer_renglon}..."
-
-            opciones = pendientes.apply(crear_etiqueta, axis=1).tolist()
-            seleccion = st.selectbox("Selecciona el ticket que deseas modificar:", opciones)
+            # --- NUEVO: BUSCADOR DE TEXTO ---
+            busqueda = st.text_input("🔍 Buscar por nombre de Cliente:", placeholder="Escribe las primeras letras...")
             
-            # Extraer el ID para buscar los datos
-            id_sel = int(float(seleccion.split(" | ")[0].replace("#", "")))
-            fila_idx = df_actual.index[df_actual["ID_TICKET"].astype(float).astype(int) == id_sel].tolist()[0]
-            d = df_actual.loc[fila_idx] # 'd' contiene todos los datos actuales
+            # 2. Aplicamos el filtro si el usuario escribió algo
+            if busqueda:
+                pendientes = pendientes[pendientes["CLIENTES"].str.contains(busqueda, case=False, na=False)]
+            
+            # 3. Ordenamiento por Cliente e ID
+            pendientes["ID_TICKET"] = pd.to_numeric(pendientes["ID_TICKET"], errors='coerce')
+            pendientes = pendientes.sort_values(by=["CLIENTES", "ID_TICKET"], ascending=[True, True])
+            
+            if not pendientes.empty:
+                def crear_etiqueta(row):
+                    primer_renglon = str(row['CONSULTAS']).split('\n')[0][:50]
+                    return f"{row['CLIENTES']} | #{int(row['ID_TICKET'])} | Usuario: {row['USUARIO']} | Obs: {primer_renglon}..."
 
-            # Formulario de Edición Completo
-            with st.form("edit_form_avanzado"):
-                st.markdown(f"### ✏️ Editando Ticket **#{id_sel}**")
+                opciones = pendientes.apply(crear_etiqueta, axis=1).tolist()
+                seleccion = st.selectbox("Selecciona el ticket:", opciones)
                 
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    e_consultor = st.text_input("Consultor", value=d["CONSULTOR"])
-                    # Buscamos el índice actual para el selectbox
-                    lista_estados = ["ABIERTO", "EN PROCESO", "CERRADO"]
-                    idx_estado = lista_estados.index(d["ESTADO"].upper()) if d["ESTADO"].upper() in lista_estados else 0
-                    e_estado = st.selectbox("Estado", lista_estados, index=idx_estado)
-                    e_prioridad = st.select_slider("Prioridad", options=["BAJA", "MEDIA", "ALTA"], value=d["PRIORIDAD"].upper())
-                
-                with c2:
-                    e_cliente = st.text_input("Cliente", value=d["CLIENTES"])
-                    e_usuario = st.text_input("Usuario", value=d["USUARIO"])
-                    e_modulo = st.text_input("Módulo", value=d["MODULO"])
-                    e_online = st.checkbox("¿Se resolvió Online?", value=(True if d["ONLINE"] == "SI" else False))
+                # Extracción segura del ID
+                id_sel = int(seleccion.split(" | #")[1].split(" | ")[0])
+                fila_idx = df_actual.index[df_actual["ID_TICKET"].astype(float).astype(int) == id_sel].tolist()[0]
+                d = df_actual.loc[fila_idx]
 
-                with c3:
-                    # Convertimos strings de la base a objetos date para los selectores
-                    f_cons_dt = datetime.strptime(str(d["FE_CONSULT"]), '%Y-%m-%d') if d["FE_CONSULT"] else datetime.now()
-                    f_rta_dt = datetime.strptime(str(d["FE_RTA"]), '%Y-%m-%d') if d["FE_RTA"] else datetime.now()
+                # Historial de modificación
+                fecha_mod = d["ULTIMA_MODIF"] if "ULTIMA_MODIF" in d and not pd.isna(d["ULTIMA_MODIF"]) else "Sin registro"
+                quien_mod = d["MODIFICADO_POR"] if "MODIFICADO_POR" in d and not pd.isna(d["MODIFICADO_POR"]) else "Desconocido"
+                st.warning(f"🕒 **Última modificación:** el {fecha_mod} por: **{quien_mod}**")
+
+                with st.form("edit_form_final"):
+                    st.markdown(f"### 🔒 Editando Ticket **#{id_sel}**")
                     
-                    e_fe_consult = st.date_input("Fecha Consulta", f_cons_dt)
-                    e_fe_rta = st.date_input("Fecha Respuesta", f_rta_dt)
-                    e_tiempo = st.number_input("Tiempo Respuesta (horas/min)", value=int(float(d["TIEMPO_RES"])))
-
-                st.divider()
-                e_consultas = st.text_area("Detalle de la Consulta", value=d["CONSULTAS"])
-                e_respuestas = st.text_area("Detalle de la Respuesta", value=d["RESPUESTAS"])
-                
-                btn_update = st.form_submit_button("🔥 GUARDAR CAMBIOS")
-
-            if btn_update:
-                try:
-                    # Aplicamos Mayúsculas a los campos editados (excepto textos largos)
-                    df_actual.at[fila_idx, "CONSULTOR"] = e_consultor.upper()
-                    df_actual.at[fila_idx, "ESTADO"] = e_estado.upper()
-                    df_actual.at[fila_idx, "PRIORIDAD"] = e_prioridad.upper()
-                    df_actual.at[fila_idx, "CLIENTES"] = e_cliente.upper()
-                    df_actual.at[fila_idx, "USUARIO"] = e_usuario.upper()
-                    df_actual.at[fila_idx, "MODULO"] = e_modulo.upper()
-                    df_actual.at[fila_idx, "ONLINE"] = "SI" if e_online else "NO"
-                    df_actual.at[fila_idx, "FE_CONSULT"] = str(e_fe_consult)
-                    df_actual.at[fila_idx, "FE_RTA"] = str(e_fe_rta)
-                    df_actual.at[fila_idx, "TIEMPO_RES"] = e_tiempo
-                    df_actual.at[fila_idx, "CONSULTAS"] = e_consultas
-                    df_actual.at[fila_idx, "RESPUESTAS"] = e_respuestas
-                    # Actualizamos Año y Mes por si cambiaron la fecha de consulta
-                    df_actual.at[fila_idx, "ANIO"] = int(e_fe_consult.year)
-                    df_actual.at[fila_idx, "MES"] = int(e_fe_consult.month)
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.text_input("Consultor", value=d["CONSULTOR"], disabled=True)
+                        st.text_input("Prioridad", value=d["PRIORIDAD"], disabled=True)
+                        lista_estados = ["ABIERTO", "EN PROCESO", "CERRADO"]
+                        idx_estado = lista_estados.index(d["ESTADO"].upper()) if d["ESTADO"].upper() in lista_estados else 0
+                        e_estado = st.selectbox("Estado (Editable)", lista_estados, index=idx_estado)
                     
-                    conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual)
-                    st.success(f"✅ ¡Ticket #{id_sel} actualizado correctamente en la base!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error al actualizar: {e}")
+                    with c2:
+                        st.text_input("Cliente", value=d["CLIENTES"], disabled=True)
+                        st.text_input("Usuario", value=d["USUARIO"], disabled=True)
+                        st.text_input("Módulo", value=d["MODULO"], disabled=True)
+
+                    with c3:
+                        f_cons_dt = datetime.strptime(str(d["FE_CONSULT"]), '%Y-%m-%d') if d["FE_CONSULT"] else datetime.now()
+                        st.date_input("Fecha Consulta", f_cons_dt, disabled=True)
+                        f_rta_dt = datetime.strptime(str(d["FE_RTA"]), '%Y-%m-%d') if d["FE_RTA"] else datetime.now()
+                        e_fe_rta = st.date_input("Fecha Respuesta (Editable)", f_rta_dt)
+                        e_tiempo = st.number_input("Tiempo (Editable)", value=int(float(d["TIEMPO_RES"])))
+
+                    st.divider()
+                    st.text_area("Detalle de la Consulta", value=d["CONSULTAS"], disabled=True)
+                    e_respuestas = st.text_area("Detalle de la Respuesta (Editable)", value=d["RESPUESTAS"])
+                    
+                    btn_update = st.form_submit_button("💾 GUARDAR CAMBIOS")
+
+                if btn_update:
+                    try:
+                        df_actual.at[fila_idx, "ESTADO"] = e_estado.upper()
+                        df_actual.at[fila_idx, "FE_RTA"] = str(e_fe_rta)
+                        df_actual.at[fila_idx, "TIEMPO_RES"] = e_tiempo
+                        df_actual.at[fila_idx, "RESPUESTAS"] = e_respuestas
+                        df_actual.at[fila_idx, "ULTIMA_MODIF"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        df_actual.at[fila_idx, "MODIFICADO_POR"] = usuario_pc
+                        
+                        conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual)
+                        st.success(f"✅ Ticket #{id_sel} actualizado correctamente.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error al actualizar: {e}")
+            else:
+                st.info("No se encontraron clientes que coincidan con tu búsqueda.")
         else:
-            st.info("No hay tickets pendientes para modificar.")
+            st.info("No hay tickets pendientes.")
     else:
         st.warning("La base de datos está vacía.")
