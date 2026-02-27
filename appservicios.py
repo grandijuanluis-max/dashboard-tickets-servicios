@@ -3,22 +3,25 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
+# Configuración de la página
+st.set_page_config(page_title="Registro de Tickets", layout="centered")
+
+st.title("📋 Registro de Consultas y Tickets")
+
 # 1. Configuración de la URL (ID de tu hoja)
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 
 # 2. Crear la conexión
+# Asegúrate de que en Secrets pusiste [connections.gsheets]
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 3. Diagnóstico de Credenciales (El que falló antes)
+# 3. Diagnóstico de Conexión
 if conn._service_account_info is not None:
-    st.success("🔐 ¡Credenciales detectadas correctamente!")
+    st.success("🔐 Conexión segura establecida con Google Sheets")
 else:
-    st.error("⚠️ La app no encuentra tus Secrets. Revisa el nombre de la conexión en Streamlit Cloud.")
+    st.error("⚠️ No se detectaron las credenciales. Revisa los Secrets en Streamlit Cloud.")
 
-st.title("📋 Registro de Consultas y Tickets")
-st.info(f"Conectado a la hoja: BD_Dashboard_Servicios")
-
-# --- FORMULARIO DE INGRESO ---
+# 4. # --- FORMULARIO DE INGRESO ---
 with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
     with st.form("ticket_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
@@ -69,33 +72,14 @@ with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
             "ANIO": fe_consult.year,
             "MES": fe_consult.month
         }
-        
-        # 1. Leer los datos actuales de la pestaña específica
-        df_existente = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios")
-        
-        # 2. Agregar el nuevo registro
-        df_nuevo = pd.DataFrame([nuevo_registro])
-        df_final = pd.concat([df_existente, df_nuevo], ignore_index=True)
-        
-        # 3. Actualizar la hoja en la nube (Requiere configuración de Secrets en Streamlit Cloud)
-        # conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_final)
-        
-        st.success(f"Ticket {id_ticket} guardado en BD_Dashboard_Servicios")
-        st.balloons()
-
-# --- VISTA DEL DASHBOARD ---
-st.divider()
-st.subheader("📊 Datos en Tiempo Real")
-
-# Leemos específicamente la hoja mencionada para mostrar la tabla
-df_vista = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios")
-
-if not df_vista.empty:
-    st.dataframe(df_vista, use_container_width=True)
-    
-    # Ejemplo de gráfico rápido: Tickets por Estado
-    st.subheader("Resumen por Estado")
-    estado_count = df_vista["ESTADO"].value_counts()
-    st.bar_chart(estado_count)
-else:
-    st.warning("La hoja BD_Dashboard_Servicios está vacía o no se encuentra.")
+            try:
+                # Leer datos existentes
+                df_existente = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios")
+                # Combinar
+                df_actualizado = pd.concat([df_existente, nuevo_ticket], ignore_index=True)
+                # Guardar
+                conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actualizado)
+                st.balloons()
+                st.success("✅ ¡Ticket guardado correctamente en Google Sheets!")
+            except Exception as e:
+                st.error(f"❌ Error al guardar: {e}")
