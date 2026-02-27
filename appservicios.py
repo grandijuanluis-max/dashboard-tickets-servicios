@@ -3,7 +3,7 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
-# Configuración de la página - Debe ser la primera instrucción de Streamlit
+# Configuración de la página
 st.set_page_config(page_title="Registro de Tickets", layout="wide")
 
 st.title("📋 Registro de Consultas y Tickets")
@@ -14,13 +14,7 @@ url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAE
 # 2. Crear la conexión
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 3. Diagnóstico de Conexión
-if conn._service_account_info is not None:
-    st.success("🔐 Conexión segura establecida con Google Sheets")
-else:
-    st.error("⚠️ No se detectaron las credenciales. Revisa los Secrets en Streamlit Cloud.")
-
-# 4. --- FORMULARIO DE INGRESO ---
+# 3. --- FORMULARIO DE INGRESO ---
 with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
     with st.form("ticket_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
@@ -50,9 +44,9 @@ with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
 
         enviar = st.form_submit_button("Guardar Registro")
 
-    # Lógica que se ejecuta al presionar el botón
     if enviar:
         # 1. Crear el DataFrame con el nuevo registro
+        # Usamos los nombres exactos de tus columnas de Excel
         df_nuevo = pd.DataFrame([{
             "ID_TICKET": id_ticket,
             "CONSULTOR": consultor,
@@ -74,7 +68,7 @@ with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
         }])
 
         try:
-            # 2. Leer datos existentes
+            # 2. Leer datos existentes de la pestaña específica
             df_existente = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios")
             
             # 3. Combinar datos nuevos con existentes
@@ -84,7 +78,7 @@ with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
             conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actualizado)
             
             st.balloons()
-            st.success("✅ ¡Ticket guardado correctamente en la hoja!")
+            st.success("✅ ¡Registro guardado exitosamente en BD_Dashboard_Servicios!")
             
         except Exception as e:
-            st.error(f"❌ Error al guardar: {e}")
+            st.error(f"❌ Error al conectar o guardar: {e}")
