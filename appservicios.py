@@ -9,7 +9,12 @@ st.set_page_config(page_title="Sistema de Tickets - Servicios", layout="wide")
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 
 # Establecemos la conexión
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Esto nos dirá en pantalla si la app detectó tus credenciales
+if conn._service_account_info is not None:
+    st.success("🔐 ¡Credenciales detectadas correctamente!")
+else:
+    st.error("⚠️ La app no encuentra tus Secrets. Revisa el nombre de la conexión.")
+
 
 st.title("📋 Registro de Consultas y Tickets")
 st.info(f"Conectado a la hoja: BD_Dashboard_Servicios")
