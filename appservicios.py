@@ -13,16 +13,17 @@ st.title("📋 Sistema de Gestión de Consultas y Tickets")
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# Función para leer datos sin caché
 def obtener_datos():
     df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
     df.columns = df.columns.str.strip()
-    return df
+    # Limpieza global de valores nulos para evitar el error "nan"
+    return df.fillna("")
 
-# Función para limpiar el error "nan" visual
-def limpiar_nan(val):
-    if pd.isna(val) or str(val).lower() == "nan" or str(val).strip() == "":
-        return "Sin registro"
-    return str(val)
+# Función para mostrar texto amigable en lugar de vacíos
+def formato_historial(valor):
+    v = str(valor).strip()
+    return v if v and v.lower() != "nan" else "Sin registro"
 
 usuario_pc = getpass.getuser().upper()
 
@@ -32,6 +33,7 @@ except Exception as e:
     st.error(f"Error al conectar con la base de datos: {e}")
     df_actual = pd.DataFrame()
 
+# Definición de pestañas
 tab1, tab2 = st.tabs(["➕ Nuevo Ticket", "✏️ Modificar Ticket Pendiente"])
 
 # ==========================================
@@ -69,11 +71,11 @@ with tab1:
         consultas = st.text_area("Detalle de la Consulta *")
         respuestas = st.text_area("Detalle de la Respuesta *")
         
-        enviar = st.form_submit_button("Guardar Registro")
+        enviar_nuevo = st.form_submit_button("Guardar Registro")
 
-    if enviar:
+    if enviar_nuevo:
         if not (clientes.strip() and usuario.strip() and consultas.strip() and respuestas.strip() and tiempo_res > 0):
-            st.error("⚠️ No se puede guardar: Verifica que Cliente, Usuario, Tiempo, Consulta y Respuesta estén llenos.")
+            st.error("⚠️ Faltan campos obligatorios o el tiempo es 0.")
         else:
             df_nuevo = pd.DataFrame([{
                 "ID_TICKET": proximo_id,
@@ -105,87 +107,102 @@ with tab1:
                 st.error(f"❌ Error: {e}")
 
 # ==========================================
-# TAB 2: MODIFICAR TICKET (Corrección nan y Sensibilidad)
+# TAB 2: MODIFICAR TICKET (Corregido y Estable)
 # ==========================================
 with tab2:
     st.subheader("Búsqueda y Edición de Tickets")
     
     if not df_actual.empty:
-        pendientes = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
+        # Filtro de pendientes (ignorando mayúsculas/minúsculas)
+        df_actual["ESTADO_UP"] = df_actual["ESTADO"].str.upper()
+        pendientes = df_actual[df_actual["ESTADO_UP"].isin(["ABIERTO", "EN PROCESO"])].copy()
         
         if not pendientes.empty:
-            # Buscador con llave para resetearlo
-            busqueda = st.text_input("🔍 Buscar por nombre de Cliente:", placeholder="Filtra clientes...", key="input_busqueda")
+            # Buscador de cliente
+            busqueda = st.text_input("🔍 Buscar por nombre de Cliente:", placeholder="Escribe para filtrar...", key="input_busqueda")
             
             if busqueda:
                 pendientes = pendientes[pendientes["CLIENTES"].str.contains(busqueda, case=False, na=False)]
             
-            pendientes["ID_TICKET"] = pd.to_numeric(pendientes["ID_TICKET"], errors='coerce')
-            pendientes = pendientes.sort_values(by=["CLIENTES", "ID_TICKET"], ascending=[True, True])
-            
-            if not pendientes.empty:
-                def crear_etiqueta(row):
-                    primer_renglon = str(row['CONSULTAS']).split('\n')[0][:50]
-                    return f"{row['CLIENTES']} | #{int(row['ID_TICKET'])} | Usuario: {row['USUARIO']} | Obs: {primer_renglon}..."
+            # Ordenar para facilitar la búsqueda
+            pendientes["ID_NUM"] = pd.to_numeric(pendientes["ID_TICKET"], errors='coerce')
+            pendientes = pendientes.sort_values(by=["CLIENTES", "ID_NUM"])
 
-                opciones = pendientes.apply(crear_etiqueta, axis=1).tolist()
-                seleccion = st.selectbox("Selecciona el ticket:", opciones)
+            if not pendientes.empty:
+                # Lista de opciones para el combo
+                opciones = pendientes.apply(lambda r: f"{r['CLIENTES']} | #{int(r['ID_NUM'])} | Usuario: {r['USUARIO']}", axis=1).tolist()
+                seleccion = st.selectbox("Selecciona el ticket para editar:", opciones)
                 
+                # Obtener datos del ticket seleccionado
                 id_sel = int(seleccion.split(" | #")[1].split(" | ")[0])
-                fila_idx = df_actual.index[df_actual["ID_TICKET"].astype(float).astype(int) == id_sel].tolist()[0]
+                fila_idx = df_actual.index[pd.to_numeric(df_actual["ID_TICKET"], errors='coerce') == id_sel].tolist()[0]
                 d = df_actual.loc[fila_idx]
 
-                # CORRECCIÓN VISUAL DEL NAN
-                fecha_log = limpiar_nan(d.get("ULTIMA_MODIF"))
-                usuario_log = limpiar_nan(d.get("MODIFICADO_POR"))
-                st.warning(f"🕒 **Última modificación:** el {fecha_log} por: **{usuario_log}**")
+                # Historial limpio de "nan"
+                st.warning(f"🕒 **Última modificación:** el {formato_historial(d['ULTIMA_MODIF'])} por: **{formato_historial(d['MODIFICADO_POR'])}**")
 
-                # USO DE FORM PARA EVITAR GUARDADO ACCIDENTAL CON ENTER
-                with st.form("form_edicion_segura"):
+                # FORMULARIO DE EDICIÓN: Evita que el "Enter" guarde prematuramente
+                with st.form("form_edicion_final"):
                     st.markdown(f"### 🔒 Editando Ticket **#{id_sel}**")
                     ce1, ce2, ce3 = st.columns(3)
+                    
                     with ce1:
                         st.text_input("Consultor", value=d["CONSULTOR"], disabled=True)
-                        lista_estados = ["ABIERTO", "EN PROCESO", "CERRADO"]
-                        idx_estado = lista_estados.index(d["ESTADO"].upper()) if d["ESTADO"].upper() in lista_estados else 0
-                        e_estado = st.selectbox("Estado (Editable)", lista_estados, index=idx_estado)
+                        st.text_input("Prioridad", value=d["PRIORIDAD"], disabled=True)
+                        lista_est = ["ABIERTO", "EN PROCESO", "CERRADO"]
+                        curr_est = d["ESTADO"].upper()
+                        idx_est = lista_est.index(curr_est) if curr_est in lista_est else 0
+                        nuevo_estado = st.selectbox("Estado (Editable)", lista_est, index=idx_est)
                     
                     with ce2:
                         st.text_input("Cliente", value=d["CLIENTES"], disabled=True)
                         st.text_input("Usuario", value=d["USUARIO"], disabled=True)
+                        st.text_input("Módulo", value=d["MODULO"], disabled=True)
 
                     with ce3:
-                        f_rta_dt = datetime.strptime(str(d["FE_RTA"]), '%Y-%m-%d') if d["FE_RTA"] and str(d["FE_RTA"]) != "nan" else datetime.now()
-                        e_fe_rta = st.date_input("Fecha Respuesta (Editable)", f_rta_dt)
-                        e_tiempo = st.number_input("Tiempo (Editable) *", value=int(float(d["TIEMPO_RES"])), min_value=0)
+                        # Gestión de fechas para evitar errores de formato
+                        try:
+                            f_rta_dt = datetime.strptime(str(d["FE_RTA"]), '%Y-%m-%d')
+                        except:
+                            f_rta_dt = datetime.now()
+                        
+                        nueva_fe_rta = st.date_input("Fecha Respuesta (Editable)", f_rta_dt)
+                        nuevo_tiempo = st.number_input("Tiempo (Editable) *", value=int(float(d["TIEMPO_RES"] if d["TIEMPO_RES"] != "" else 0)), min_value=0)
 
                     st.divider()
                     st.text_area("Detalle de la Consulta", value=d["CONSULTAS"], disabled=True)
-                    e_respuestas = st.text_area("Detalle de la Respuesta (Editable) *", value=d["RESPUESTAS"])
+                    nueva_rta = st.text_area("Detalle de la Respuesta (Editable) *", value=d["RESPUESTAS"])
 
-                    btn_update = st.form_submit_button("💾 GUARDAR CAMBIOS")
+                    # Botón de guardado manual
+                    guardar_cambios = st.form_submit_button("💾 GUARDAR CAMBIOS EN TICKET")
 
-                if btn_update:
-                    if not (e_respuestas.strip() and e_tiempo > 0):
-                        st.error("⚠️ Debes completar Tiempo y Respuesta antes de guardar.")
+                if guardar_cambios:
+                    if not (nueva_rta.strip() and nuevo_tiempo > 0):
+                        st.error("⚠️ La Respuesta y el Tiempo son obligatorios para actualizar.")
                     else:
                         try:
-                            df_actual.at[fila_idx, "ESTADO"] = e_estado.upper()
-                            df_actual.at[fila_idx, "FE_RTA"] = str(e_fe_rta)
-                            df_actual.at[fila_idx, "TIEMPO_RES"] = e_tiempo
-                            df_actual.at[fila_idx, "RESPUESTAS"] = e_respuestas
+                            # Actualización de la fila en el DataFrame local
+                            df_actual.at[fila_idx, "ESTADO"] = nuevo_estado.upper()
+                            df_actual.at[fila_idx, "FE_RTA"] = str(nueva_fe_rta)
+                            df_actual.at[fila_idx, "TIEMPO_RES"] = nuevo_tiempo
+                            df_actual.at[fila_idx, "RESPUESTAS"] = nueva_rta
                             df_actual.at[fila_idx, "ULTIMA_MODIF"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             df_actual.at[fila_idx, "MODIFICADO_POR"] = usuario_pc
                             
-                            conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual)
+                            # Limpieza de columnas auxiliares antes de subir
+                            df_para_subir = df_actual.drop(columns=["ESTADO_UP", "ID_NUM"], errors="ignore")
                             
-                            # Limpiar buscador y refrescar
+                            conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_para_subir)
+                            
+                            # Reset del buscador y refresco
                             st.session_state.input_busqueda = "" 
-                            st.success("✅ Actualizado correctamente.")
+                            st.success("✅ Ticket actualizado correctamente.")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"❌ Error: {e}")
+                            st.error(f"❌ Error al actualizar: {e}")
             else:
-                st.info("No se encontraron coincidencias.")
+                st.info("No hay resultados para esa búsqueda.")
         else:
             st.info("No hay tickets pendientes.")
+    else:
+        st.warning("La base de datos está vacía.")
