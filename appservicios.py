@@ -13,7 +13,6 @@ st.set_page_config(page_title="Gestión de Tickets - GR Consulting", layout="wid
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Memoria de navegación para evitar saltos accidentales
 if "menu_activo" not in st.session_state:
     st.session_state.menu_activo = "➕ NUEVO"
 
@@ -21,13 +20,6 @@ def obtener_datos():
     df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
     df.columns = df.columns.str.strip()
     return df.fillna("")
-
-def limpiar_fecha(f):
-    if not f or str(f).lower() == "nan" or str(f).strip() == "": return ""
-    try:
-        dt = pd.to_datetime(f, dayfirst=True, errors='coerce')
-        return dt.strftime('%d/%m/%Y') if not pd.isna(dt) else str(f)
-    except: return str(f)
 
 usuario_pc = getpass.getuser().upper()
 
@@ -44,7 +36,7 @@ except Exception as e:
     df_actual = pd.DataFrame()
 
 # ==========================================
-# MENÚ DE NAVEGACIÓN ESTILO OS
+# MENÚ DE NAVEGACIÓN ESTABLE
 # ==========================================
 st.title("📋 Sistema de Gestión de Consultas y Tickets")
 cols = st.columns(4)
@@ -56,9 +48,7 @@ if cols[3].button("📊 REPORTES", use_container_width=True): st.session_state.m
 st.markdown(f"📍 Estás en: **{st.session_state.menu_activo}**")
 st.divider()
 
-# ==========================================
-# SECCIÓN 1: NUEVO TICKET
-# ==========================================
+# --- LÓGICA DE SECCIONES ---
 if st.session_state.menu_activo == "➕ NUEVO":
     proximo_id = int(df_actual["ID_NUM"].max()) + 1 if not df_actual.empty else 1
     with st.form("form_nuevo", clear_on_submit=True):
@@ -71,12 +61,10 @@ if st.session_state.menu_activo == "➕ NUEVO":
             est = st.selectbox("Estado", ["ABIERTO", "EN PROCESO", "CERRADO"])
         with c2:
             ate = st.selectbox("Atención", ["TELEFÓNICA", "WASAPP", "MEET", "PROGRAMADA", "VISITA"])
-            cli_opc = ["PALAVERSICH", "IPR", "KARTONSEC", "PASINA", "ANHSA", "SG_MONTAGES", "PETROBONO", "PXP", "DOPERT", "FREMEC","SUAREZ", "MONTARFE", "LGS", "CONDIMENTOS", "GR_CONSULTING"]
-            cliente = st.selectbox("Cliente", cli_opc)
+            cliente = st.selectbox("Cliente", ["PALAVERSICH", "IPR", "KARTONSEC", "PASINA", "ANHSA", "SG_MONTAGES", "PETROBONO", "PXP", "DOPERT", "FREMEC","SUAREZ", "MONTARFE", "LGS", "CONDIMENTOS", "GR_CONSULTING"])
             usuario_n = st.text_input("Usuario *").upper()
         with c3:
-            mod_opc = ["ACCESOS", "ADMINISTRACION", "CONTABILIDAD", "COMPRAS", "VENTAS", "LOGISTICA", "ECCOMERCE", "MAILS", "PROGRAMA", "PRODUCCION","SERVIDOR", "WEB", "GERENCIAL", "RRHH", "IMPUESTOS", "SUCURSAL", "OTROS"]
-            modulo = st.selectbox("Módulo", mod_opc)
+            modulo = st.selectbox("Módulo", ["ACCESOS", "ADMINISTRACION", "CONTABILIDAD", "COMPRAS", "VENTAS", "LOGISTICA", "ECCOMERCE", "MAILS", "PROGRAMA", "PRODUCCION","SERVIDOR", "WEB", "GERENCIAL", "RRHH", "IMPUESTOS", "SUCURSAL", "OTROS"])
             fe_c = st.date_input("Fecha Consulta", datetime.now())
             t_res = st.number_input("Tiempo (min) *", min_value=0)
         con_det = st.text_area("Consulta *")
@@ -97,9 +85,6 @@ if st.session_state.menu_activo == "➕ NUEVO":
                 conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=pd.concat([obtener_datos(), nuevo_reg], ignore_index=True))
                 st.balloons(); st.rerun()
 
-# ==========================================
-# SECCIÓN 2: MODIFICAR TICKET
-# ==========================================
 elif st.session_state.menu_activo == "✏️ MODIFICAR":
     if not df_actual.empty:
         pend = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
@@ -137,17 +122,14 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                         conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual.drop(columns=["ID_NUM"], errors="ignore"))
                         st.rerun()
 
-# ==========================================
-# SECCIÓN 3: CONSULTAR TICKETS
-# ==========================================
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
     st.header("🔍 Búsqueda Histórica")
     c1, c2, c3 = st.columns(3)
     with c1: f_cli = st.selectbox("Cliente:", ["TODOS"] + sorted(list(df_actual["CLIENTES"].unique())))
     with c2: f_anios = st.multiselect("Año(s):", options=sorted(df_actual["ANIO"].unique(), reverse=True), default=[2026] if 2026 in df_actual["ANIO"].unique() else [])
     with c3: 
-        meses_dict = {1:"Ene", 2:"Feb", 3:"Mar", 4:"Abr", 5:"May", 6:"Jun", 7:"Jul", 8:"Ago", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dic"}
-        f_meses = st.multiselect("Mes(es):", options=sorted(df_actual["MES"].unique()), format_func=lambda x: meses_dict.get(x, x))
+        mes_d = {1:"Ene", 2:"Feb", 3:"Mar", 4:"Abr", 5:"May", 6:"Jun", 7:"Jul", 8:"Ago", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dic"}
+        f_meses = st.multiselect("Mes(es):", options=sorted(df_actual["MES"].unique()), format_func=lambda x: mes_d.get(x, x))
     
     df_f = df_actual.copy()
     if f_cli != "TODOS": df_f = df_f[df_f["CLIENTES"] == f_cli]
@@ -160,6 +142,7 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
         id_c = int(sel_c.split("#")[1].split(" |")[0])
         dc = df_f[df_f["ID_NUM"] == id_c].iloc[0]
         with st.container(border=True):
+            st.subheader(f"🔍 Ficha Ticket #{id_c}")
             v1, v2, v3 = st.columns(3)
             with v1: st.text_input("Consultor", dc["CONSULTOR"], disabled=True); st.text_input("Estado", dc["ESTADO"], disabled=True)
             with v2: st.text_input("Cliente", dc["CLIENTES"], disabled=True); st.text_input("Usuario", dc["USUARIO"], disabled=True)
@@ -167,7 +150,7 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
             st.text_area("Consulta", dc["CONSULTAS"], disabled=True); st.text_area("Respuesta", dc["RESPUESTAS"], disabled=True)
             
             pdf = FPDF()
-            pdf.add_page(); pdf.set_draw_color(200, 200, 200); pdf.set_font("Arial", 'B', 18)
+            pdf.add_page(); pdf.set_draw_color(180, 180, 180); pdf.set_font("Arial", 'B', 16)
             pdf.cell(0, 15, txt="GR Consulting - Servicios", ln=True, align='C')
             pdf.set_font("Arial", 'B', 12); pdf.cell(0, 10, txt=f"Ticket #{id_c}", ln=True, align='L'); pdf.ln(5)
             pdf.set_font("Arial", 'B', 10)
@@ -180,31 +163,72 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
             pdf.set_font("Arial", size=10); pdf.multi_cell(0, 8, txt=str(dc["CONSULTAS"]), border=1)
             pdf.ln(5); pdf.set_font("Arial", 'B', 11); pdf.cell(0, 8, "RESPUESTA:", ln=True)
             pdf.set_font("Arial", size=10); pdf.multi_cell(0, 8, txt=str(dc["RESPUESTAS"]), border=1)
-            st.download_button("📥 Reporte PDF", pdf.output(dest='S').encode('latin-1'), f"Reporte_{id_c}.pdf")
+            st.download_button("📥 Descargar PDF", pdf.output(dest='S').encode('latin-1'), f"Ticket_{id_c}.pdf")
 
 # ==========================================
-# SECCIÓN 4: REPORTES ANALÍTICOS
+# SECCIÓN 4: REPORTES ANALÍTICOS (NUEVA LÓGICA EXPORT)
 # ==========================================
 else:
     st.header("📊 Reportes Operativos")
     f1, f2, f3 = st.columns(3)
     with f1: f_cli = st.multiselect("Clientes:", sorted(df_actual["CLIENTES"].unique())); f_con = st.multiselect("Consultores:", sorted(df_actual["CONSULTOR"].unique()))
     with f2: f_mod = st.multiselect("Módulos:", sorted(df_actual["MODULO"].unique())); f_ani = st.multiselect("Años:", sorted(df_actual["ANIO"].unique(), reverse=True))
-    with f3: f_mes = st.multiselect("Meses:", sorted(df_actual["MES"].unique()), format_func=lambda x: {1:"Ene", 2:"Feb", 3:"Mar", 4:"Abr", 5:"May", 6:"Jun", 7:"Jul", 8:"Ago", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dic"}.get(x, x))
+    with f3: f_mes = st.multiselect("Meses:", sorted(df_actual["MES"].unique()), format_func=lambda x: mes_d.get(x, x))
     
     df_rep = df_actual.copy()
     if f_cli: df_rep = df_rep[df_rep["CLIENTES"].isin(f_cli)]
     if f_mod: df_rep = df_rep[df_rep["MODULO"].isin(f_mod)]
-    if f_con: df_rep = df_rep[df_rep["CONSULTOR"].isin(f_con)]
+    if f_con: df_rep = df_rep[df_con["CONSULTOR"].isin(f_con)]
     if f_ani: df_rep = df_rep[df_rep["ANIO"].isin(f_ani)]
     if f_mes: df_rep = df_rep[df_rep["MES"].isin(f_mes)]
     
     if not df_rep.empty:
         t_min = df_rep["TIEMPO_RES"].sum(); t_hs = t_min / 60
         m1, m2, m3 = st.columns(3); m1.metric("Tickets", len(df_rep)); m2.metric("Minutos", f"{t_min:,.0f}"); m3.metric("Horas", f"{t_hs:,.2f}")
-        res = df_rep.groupby(["CLIENTES", "MODULO", "CONSULTOR", "ANIO", "MES"])["TIEMPO_RES"].sum().reset_index()
-        res["HORAS"] = (res["TIEMPO_RES"] / 60).round(2)
-        st.dataframe(res, use_container_width=True, hide_index=True)
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='openpyxl') as w: res.to_excel(w, index=False)
-        st.download_button("📥 Excel Analítico", buf.getvalue(), "Analisis_GR.xlsx")
+        
+        # Tabla agrupada (Lo que se ve en pantalla)
+        res_agrupado = df_rep.groupby(["CLIENTES", "MODULO", "CONSULTOR", "ANIO", "MES"])["TIEMPO_RES"].sum().reset_index()
+        res_agrupado["HORAS"] = (res_agrupado["TIEMPO_RES"] / 60).round(2)
+        st.subheader("Vista Agrupada")
+        st.dataframe(res_agrupado, use_container_width=True, hide_index=True)
+        
+        st.divider()
+        st.subheader("📥 Exportar Reporte")
+        
+        # Pregunta si quiere agrupado o detallado
+        tipo_ex = st.radio("Selecciona el nivel de detalle para Excel:", ["Agrupado (Resumen)", "Detallado (Ticket por Ticket)"], horizontal=True)
+        
+        col_ex1, col_ex2 = st.columns(2)
+        
+        with col_ex1:
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine='openpyxl') as w:
+                if "Agrupado" in tipo_ex:
+                    res_agrupado.to_excel(w, index=False, sheet_name='Resumen_Agrupado')
+                    nombre_f = "Reporte_Agrupado_GR.xlsx"
+                else:
+                    # Detallado: Incluye fecha, consulta y respuesta
+                    columnas_det = ["ID_TICKET", "FE_CONSULT", "CLIENTES", "USUARIO", "CONSULTOR", "MODULO", "CONSULTAS", "RESPUESTAS", "TIEMPO_RES"]
+                    df_detallado = df_rep[columnas_det].copy()
+                    df_detallado.to_excel(w, index=False, sheet_name='Detalle_Tickets')
+                    nombre_f = "Reporte_Detallado_GR.xlsx"
+            
+            st.download_button(label="📥 Descargar Excel (.xlsx)", data=buf.getvalue(), file_name=nombre_f, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+        with col_ex2:
+            # Reporte PDF (Resumen Institucional)
+            pdf_r = FPDF()
+            pdf_r.add_page(); pdf_r.set_font("Arial", 'B', 14)
+            pdf_r.cell(0, 10, "GR Consulting - Resumen de Servicios", ln=True, align='C')
+            pdf_r.set_font("Arial", size=9); pdf_r.ln(5)
+            # Cabecera PDF
+            pdf_r.cell(50, 8, "Cliente", 1); pdf_r.cell(40, 8, "Modulo", 1); pdf_r.cell(40, 8, "Consultor", 1); pdf_r.cell(25, 8, "Minutos", 1); pdf_r.cell(25, 8, "Horas", 1); pdf_r.ln()
+            for i, row in res_agrupado.head(40).iterrows():
+                pdf_r.cell(50, 8, str(row['CLIENTES'])[:20], 1); pdf_r.cell(40, 8, str(row['MODULO'])[:15], 1)
+                pdf_r.cell(40, 8, str(row['CONSULTOR'])[:15], 1); pdf_r.cell(25, 8, str(row['TIEMPO_RES']), 1)
+                pdf_r.cell(25, 8, str(row['HORAS']), 1); pdf_r.ln()
+            pdf_r.ln(5); pdf_r.set_font("Arial", 'B', 10)
+            pdf_r.cell(0, 10, f"TOTAL: {t_min} min / {t_hs:.2f} hs", ln=True)
+            st.download_button("📥 Descargar PDF (.pdf)", pdf_r.output(dest='S').encode('latin-1'), "Resumen_Servicios_GR.pdf", mime="application/pdf")
+    else:
+        st.info("No hay datos para exportar con los filtros actuales.")
