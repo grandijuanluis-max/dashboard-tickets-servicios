@@ -18,7 +18,6 @@ def obtener_datos():
     df.columns = df.columns.str.strip()
     return df
 
-# Obtener el nombre del usuario de la computadora
 usuario_pc = getpass.getuser().upper()
 
 try:
@@ -30,7 +29,7 @@ except Exception as e:
 tab1, tab2 = st.tabs(["➕ Nuevo Ticket", "✏️ Modificar Ticket Pendiente"])
 
 # ==========================================
-# TAB 1: CARGA DE NUEVO TICKET
+# TAB 1: CARGA DE NUEVO TICKET (Validación en vivo)
 # ==========================================
 with tab1:
     if not df_actual.empty and "ID_TICKET" in df_actual.columns:
@@ -41,29 +40,36 @@ with tab1:
 
     st.subheader(f"Cargando Ticket N°: {proximo_id}")
     
-    with st.form("nuevo_ticket_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.info(f"ID Automático: {proximo_id}")
-            consultor = st.text_input("Consultor")
-            tipo_cons = st.selectbox("Tipo de Consulta", ["Funcional", "Técnica", "Comercial"])
-            prioridad = st.select_slider("Prioridad", options=["Baja", "Media", "Alta"])
-            estado = st.selectbox("Estado", ["Abierto", "En Proceso", "Cerrado"])
-        with col2:
-            atencion = st.selectbox("Atención", ["Telefónica", "Wasapp", "Meet", "Visita"])
-            clientes = st.text_input("Cliente")
-            usuario = st.text_input("Usuario")
-            modulo = st.selectbox("Módulo", ["Accesos", "Administracion", "Contabilidad", "Compras", "Ventas", "Logistica", "Eccomerce", "Mails", "Programa", "Produccion","Servidor", "Web", "Gerencial", "RRHH", "Sucursal", "Otros"])
-            online = st.checkbox("¿Se resolvió Online?")
-        with col3:
-            fe_consult = st.date_input("Fecha Consulta", datetime.now())
-            fe_rta = st.date_input("Fecha Respuesta", datetime.now())
-            tiempo_res = st.number_input("Tiempo Respuesta (horas/min)", min_value=0)
+    # Usamos columnas directas en lugar de Form para permitir el bloqueo del botón
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.info(f"ID Automático: {proximo_id}")
+        consultor = st.text_input("Consultor")
+        tipo_cons = st.selectbox("Tipo de Consulta", ["Funcional", "Técnica", "Comercial"])
+        prioridad = st.select_slider("Prioridad", options=["Baja", "Media", "Alta"])
+        estado = st.selectbox("Estado", ["Abierto", "En Proceso", "Cerrado"])
+    with col2:
+        atencion = st.selectbox("Atención", ["Telefónica", "Wasapp", "Meet", "Visita"])
+        clientes = st.text_input("Cliente *")
+        usuario = st.text_input("Usuario *")
+        modulo = st.selectbox("Módulo", ["Accesos", "Administracion", "Contabilidad", "Compras", "Ventas", "Logistica", "Eccomerce", "Mails", "Programa", "Produccion","Servidor", "Web", "Gerencial", "RRHH", "Sucursal", "Otros"])
+        online = st.checkbox("¿Se resolvió Online?")
+    with col3:
+        fe_consult = st.date_input("Fecha Consulta", datetime.now())
+        fe_rta = st.date_input("Fecha Respuesta", datetime.now())
+        tiempo_res = st.number_input("Tiempo Respuesta (horas/min) *", min_value=0, step=1)
 
-        st.divider()
-        consultas = st.text_area("Detalle de la Consulta")
-        respuestas = st.text_area("Detalle de la Respuesta")
-        enviar = st.form_submit_button("Guardar Registro")
+    st.divider()
+    consultas = st.text_area("Detalle de la Consulta *")
+    respuestas = st.text_area("Detalle de la Respuesta *")
+
+    # LÓGICA DE BLOQUEO: El botón se activa solo si los campos tienen texto y tiempo > 0
+    campos_completos_nuevo = all([clientes.strip(), usuario.strip(), consultas.strip(), respuestas.strip(), tiempo_res > 0])
+    
+    if not campos_completos_nuevo:
+        st.caption("⚠️ El botón se activará cuando completes todos los campos marcados con (*).")
+
+    enviar = st.button("Guardar Registro", disabled=not campos_completos_nuevo, type="primary")
 
     if enviar:
         df_nuevo = pd.DataFrame([{
@@ -91,30 +97,26 @@ with tab1:
             df_final = pd.concat([obtener_datos(), df_nuevo], ignore_index=True)
             conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_final)
             st.balloons()
-            st.success(f"✅ Ticket #{proximo_id} guardado.")
+            st.success("✅ Ticket guardado correctamente.")
             st.rerun() 
         except Exception as e:
             st.error(f"❌ Error al guardar: {e}")
 
 # ==========================================
-# TAB 2: MODIFICAR TICKET (Con Buscador de Cliente)
+# TAB 2: MODIFICAR TICKET (Con Botón Bloqueable)
 # ==========================================
 with tab2:
     st.subheader("Búsqueda y Edición de Tickets")
     
     if not df_actual.empty:
-        # 1. Filtramos los pendientes
         pendientes = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
         
         if not pendientes.empty:
-            # --- NUEVO: BUSCADOR DE TEXTO ---
-            busqueda = st.text_input("🔍 Buscar por nombre de Cliente:", placeholder="Escribe las primeras letras...")
+            busqueda = st.text_input("🔍 Buscar por nombre de Cliente:", placeholder="Filtra clientes...", key="input_busqueda")
             
-            # 2. Aplicamos el filtro si el usuario escribió algo
             if busqueda:
                 pendientes = pendientes[pendientes["CLIENTES"].str.contains(busqueda, case=False, na=False)]
             
-            # 3. Ordenamiento por Cliente e ID
             pendientes["ID_TICKET"] = pd.to_numeric(pendientes["ID_TICKET"], errors='coerce')
             pendientes = pendientes.sort_values(by=["CLIENTES", "ID_TICKET"], ascending=[True, True])
             
@@ -126,44 +128,40 @@ with tab2:
                 opciones = pendientes.apply(crear_etiqueta, axis=1).tolist()
                 seleccion = st.selectbox("Selecciona el ticket:", opciones)
                 
-                # Extracción segura del ID
                 id_sel = int(seleccion.split(" | #")[1].split(" | ")[0])
                 fila_idx = df_actual.index[df_actual["ID_TICKET"].astype(float).astype(int) == id_sel].tolist()[0]
                 d = df_actual.loc[fila_idx]
 
-                # Historial de modificación
-                fecha_mod = d["ULTIMA_MODIF"] if "ULTIMA_MODIF" in d and not pd.isna(d["ULTIMA_MODIF"]) else "Sin registro"
-                quien_mod = d["MODIFICADO_POR"] if "MODIFICADO_POR" in d and not pd.isna(d["MODIFICADO_POR"]) else "Desconocido"
-                st.warning(f"🕒 **Última modificación:** el {fecha_mod} por: **{quien_mod}**")
+                st.warning(f"🕒 **Última modificación:** el {d.get('ULTIMA_MODIF','-')} por: **{d.get('MODIFICADO_POR','-')}**")
 
-                with st.form("edit_form_final"):
-                    st.markdown(f"### 🔒 Editando Ticket **#{id_sel}**")
-                    
-                    c1, c2, c3 = st.columns(3)
-                    with c1:
-                        st.text_input("Consultor", value=d["CONSULTOR"], disabled=True)
-                        st.text_input("Prioridad", value=d["PRIORIDAD"], disabled=True)
-                        lista_estados = ["ABIERTO", "EN PROCESO", "CERRADO"]
-                        idx_estado = lista_estados.index(d["ESTADO"].upper()) if d["ESTADO"].upper() in lista_estados else 0
-                        e_estado = st.selectbox("Estado (Editable)", lista_estados, index=idx_estado)
-                    
-                    with c2:
-                        st.text_input("Cliente", value=d["CLIENTES"], disabled=True)
-                        st.text_input("Usuario", value=d["USUARIO"], disabled=True)
-                        st.text_input("Módulo", value=d["MODULO"], disabled=True)
+                st.markdown(f"### 🔒 Editando Ticket **#{id_sel}**")
+                ce1, ce2, ce3 = st.columns(3)
+                with ce1:
+                    st.text_input("Consultor", value=d["CONSULTOR"], disabled=True, key=f"c_{id_sel}")
+                    lista_estados = ["ABIERTO", "EN PROCESO", "CERRADO"]
+                    idx_estado = lista_estados.index(d["ESTADO"].upper()) if d["ESTADO"].upper() in lista_estados else 0
+                    e_estado = st.selectbox("Estado (Editable)", lista_estados, index=idx_estado)
+                
+                with ce2:
+                    st.text_input("Cliente", value=d["CLIENTES"], disabled=True, key=f"cl_{id_sel}")
+                    st.text_input("Usuario", value=d["USUARIO"], disabled=True, key=f"us_{id_sel}")
 
-                    with c3:
-                        f_cons_dt = datetime.strptime(str(d["FE_CONSULT"]), '%Y-%m-%d') if d["FE_CONSULT"] else datetime.now()
-                        st.date_input("Fecha Consulta", f_cons_dt, disabled=True)
-                        f_rta_dt = datetime.strptime(str(d["FE_RTA"]), '%Y-%m-%d') if d["FE_RTA"] else datetime.now()
-                        e_fe_rta = st.date_input("Fecha Respuesta (Editable)", f_rta_dt)
-                        e_tiempo = st.number_input("Tiempo (Editable)", value=int(float(d["TIEMPO_RES"])))
+                with ce3:
+                    f_rta_dt = datetime.strptime(str(d["FE_RTA"]), '%Y-%m-%d') if d["FE_RTA"] else datetime.now()
+                    e_fe_rta = st.date_input("Fecha Respuesta (Editable)", f_rta_dt)
+                    e_tiempo = st.number_input("Tiempo (Editable) *", value=int(float(d["TIEMPO_RES"])), min_value=0)
 
-                    st.divider()
-                    st.text_area("Detalle de la Consulta", value=d["CONSULTAS"], disabled=True)
-                    e_respuestas = st.text_area("Detalle de la Respuesta (Editable)", value=d["RESPUESTAS"])
-                    
-                    btn_update = st.form_submit_button("💾 GUARDAR CAMBIOS")
+                st.divider()
+                st.text_area("Detalle de la Consulta", value=d["CONSULTAS"], disabled=True, key=f"con_{id_sel}")
+                e_respuestas = st.text_area("Detalle de la Respuesta (Editable) *", value=d["RESPUESTAS"])
+
+                # LÓGICA DE BLOQUEO EN EDICIÓN
+                campos_completos_edit = all([e_respuestas.strip(), e_tiempo > 0])
+                
+                if not campos_completos_edit:
+                    st.caption("⚠️ Completa el Tiempo y la Respuesta para habilitar el guardado.")
+
+                btn_update = st.button("💾 GUARDAR CAMBIOS", disabled=not campos_completos_edit, type="primary", key=f"btn_{id_sel}")
 
                 if btn_update:
                     try:
@@ -175,12 +173,13 @@ with tab2:
                         df_actual.at[fila_idx, "MODIFICADO_POR"] = usuario_pc
                         
                         conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual)
-                        st.success(f"✅ Ticket #{id_sel} actualizado correctamente.")
+                        st.session_state.input_busqueda = "" 
+                        st.success("✅ Actualizado correctamente.")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"❌ Error al actualizar: {e}")
+                        st.error(f"❌ Error: {e}")
             else:
-                st.info("No se encontraron clientes que coincidan con tu búsqueda.")
+                st.info("No se encontraron coincidencias.")
         else:
             st.info("No hay tickets pendientes.")
     else:
