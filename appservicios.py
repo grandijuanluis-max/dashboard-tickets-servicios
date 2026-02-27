@@ -1,7 +1,7 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 import getpass
 import io
 from fpdf import FPDF
@@ -15,17 +15,14 @@ st.title("📋 Sistema de Gestión de Consultas y Tickets")
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Inicializar buscador
 if "input_busqueda" not in st.session_state:
     st.session_state.input_busqueda = ""
 
-# Función para leer datos y limpiar nulos
 def obtener_datos():
     df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
     df.columns = df.columns.str.strip()
     return df.fillna("")
 
-# Limpiar historial visual
 def formato_historial(valor):
     v = str(valor).strip()
     return v if v and v.lower() != "nan" and v != "None" else "Sin registro"
@@ -38,8 +35,7 @@ except Exception as e:
     st.error(f"Error al conectar con la base de datos: {e}")
     df_actual = pd.DataFrame()
 
-# DEFINICIÓN DE LAS 4 SOLAPAS
-tab1, tab2, tab3, tab4 = st.tabs(["➕ Nuevo Ticket", "✏️ Modificar Ticket", "🔍 Consultar Ticket", "📊 Reportes"])
+tab1, tab2, tab3, tab4 = st.tabs(["➕ Nuevo Ticket", "✏️ Modificar Ticket", "🔍 Consultar Tickets", "📊 Reportes"])
 
 # ==========================================
 # TAB 1: CARGA DE NUEVO TICKET
@@ -94,10 +90,10 @@ with tab1:
                 except Exception as e: st.error(f"Error: {e}")
 
 # ==========================================
-# TAB 2: MODIFICAR TICKET (EDICIÓN)
+# TAB 2: MODIFICAR TICKET
 # ==========================================
 with tab2:
-    st.subheader("Búsqueda y Edición")
+    st.subheader("Búsqueda y Edición de Tickets Pendientes")
     if not df_actual.empty:
         pendientes = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
         if not pendientes.empty:
@@ -148,48 +144,95 @@ with tab2:
                             df_final_subir = df_actual.drop(columns=["ESTADO_UP", "ID_NUM"], errors="ignore")
                             conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_final_subir)
                             st.session_state.input_busqueda = "" 
+                            st.success("✅ Ticket actualizado correctamente.")
                             st.rerun()
 
 # ==========================================
-# TAB 3: CONSULTAR TICKET INDIVIDUAL
+# TAB 3: CONSULTAR TICKETS (FILTROS MEJORADOS)
 # ==========================================
 with tab3:
-    st.subheader("🔍 Detalle Completo (Solo Lectura)")
+    st.subheader("🔍 Filtros de Consulta")
     if not df_actual.empty:
-        opciones_cons = df_actual.apply(lambda r: f"#{int(float(r['ID_TICKET']))} | {r['CLIENTES']} | {r['USUARIO']}", axis=1).tolist()
-        id_query = st.selectbox("Buscar Ticket:", opciones_cons)
-        id_cons = int(id_query.split(" | ")[0].replace("#", ""))
-        dc = df_actual[pd.to_numeric(df_actual["ID_TICKET"], errors='coerce') == id_cons].iloc[0]
+        col1, col2, col3 = st.columns(3)
         
-        st.info(f"Ficha del Ticket #{id_cons}")
-        st.write(dc.to_frame().T)
+        with col1:
+            # Opción de TODOS los clientes
+            lista_clientes = ["TODOS"] + sorted(list(df_actual["CLIENTES"].unique()))
+            f_cliente = st.selectbox("Seleccionar Cliente:", lista_clientes)
+        
+        with col2:
+            f_desde = st.date_input("Desde Fecha:", value=date(2026, 1, 1))
+            
+        with col3:
+            f_hasta = st.date_input("Hasta Fecha:", value=datetime.now().date())
 
-        col_ex1, col_ex2 = st.columns(2)
-        with col_ex1:
-            buffer_xlsx = io.BytesIO()
-            with pd.ExcelWriter(buffer_xlsx, engine='openpyxl') as writer:
-                dc.to_frame().T.to_excel(writer, index=False, sheet_name='Ticket')
-            st.download_button(label="📥 Exportar a Excel", data=buffer_xlsx.getvalue(), file_name=f"Ticket_{id_cons}.xlsx")
-        with col_ex2:
-            pdf = FPDF()
-            pdf.add_page(); pdf.set_font("Arial", 'B', 14)
-            pdf.cell(200, 10, txt=f"TICKET #{id_cons}", ln=True, align='C')
-            pdf.set_font("Arial", size=10)
-            for col in dc.index: pdf.multi_cell(0, 8, txt=f"{col}: {dc[col]}")
-            pdf_out = pdf.output(dest='S').encode('latin-1')
-            st.download_button(label="📥 Exportar a PDF", data=pdf_out, file_name=f"Ticket_{id_cons}.pdf")
+        # Aplicar Filtros
+        df_filtro = df_actual.copy()
+        
+        # Filtro de Cliente
+        if f_cliente != "TODOS":
+            df_filtro = df_filtro[df_filtro["CLIENTES"] == f_cliente]
+        
+        # Filtro de Fechas (Conversión de texto a datetime para comparar)
+        df_filtro['FECHA_DT'] = pd.to_datetime(df_filtro['FE_CONSULT'], format='%d/%m/%Y', errors='coerce').dt.date
+        df_filtro = df_filtro[(df_filtro['FECHA_DT'] >= f_desde) & (df_filtro['FECHA_DT'] <= f_hasta)]
+        
+        st.divider()
+        
+        if not df_filtro.empty:
+            st.write(f"Se encontraron **{len(df_filtro)}** tickets para los criterios seleccionados.")
+            
+            # Selector de ticket de la lista filtrada
+            opciones_cons = df_filtro.apply(lambda r: f"#{int(float(r['ID_TICKET']))} | {r['CLIENTES']} | {r['USUARIO']} | {r['FE_CONSULT']}", axis=1).tolist()
+            id_query = st.selectbox("Selecciona un ticket para ver el detalle completo:", opciones_cons, key="query_select")
+            
+            id_cons = int(id_query.split(" | ")[0].replace("#", ""))
+            dc = df_filtro[pd.to_numeric(df_filtro["ID_TICKET"], errors='coerce') == id_cons].iloc[0]
+            
+            # Vista de Solo Lectura
+            st.info(f"Ficha del Ticket #{id_cons}")
+            v1, v2, v3 = st.columns(3)
+            with v1:
+                st.text_input("Consultor ", value=dc["CONSULTOR"], disabled=True)
+                st.text_input("Estado ", value=dc["ESTADO"], disabled=True)
+            with v2:
+                st.text_input("Cliente ", value=dc["CLIENTES"], disabled=True)
+                st.text_input("Usuario ", value=dc["USUARIO"], disabled=True)
+            with v3:
+                st.text_input("Fecha Consulta ", value=dc["FE_CONSULT"], disabled=True)
+                st.text_input("Tiempo (min) ", value=dc["TIEMPO_RES"], disabled=True)
+            
+            st.text_area("Detalle Consulta ", value=dc["CONSULTAS"], disabled=True)
+            st.text_area("Detalle Respuesta ", value=dc["RESPUESTAS"], disabled=True)
+            
+            # Botones de exportación individual
+            ce1, ce2 = st.columns(2)
+            with ce1:
+                buffer_xlsx = io.BytesIO()
+                with pd.ExcelWriter(buffer_xlsx, engine='openpyxl') as writer:
+                    dc.to_frame().T.to_excel(writer, index=False, sheet_name='Ticket')
+                st.download_button(label="📥 Exportar Ticket a Excel", data=buffer_xlsx.getvalue(), file_name=f"Ticket_{id_cons}.xlsx")
+            with ce2:
+                pdf = FPDF()
+                pdf.add_page(); pdf.set_font("Arial", 'B', 14)
+                pdf.cell(200, 10, txt=f"TICKET #{id_cons}", ln=True, align='C')
+                pdf.set_font("Arial", size=10)
+                for col in dc.index: pdf.multi_cell(0, 8, txt=f"{col}: {dc[col]}")
+                pdf_out = pdf.output(dest='S').encode('latin-1')
+                st.download_button(label="📥 Exportar Ticket a PDF", data=pdf_out, file_name=f"Ticket_{id_cons}.pdf")
+        else:
+            st.info("No hay tickets que coincidan con los filtros de Cliente y Fecha.")
 
 # ==========================================
-# TAB 4: REPORTES POR CLIENTE (CORRECCIÓN CONCAT)
+# TAB 4: REPORTES POR CLIENTE
 # ==========================================
 with tab4:
-    st.subheader("📊 Reporte de Tiempos")
+    st.subheader("📊 Reporte de Tiempos Acumulados")
     if not df_actual.empty:
-        cli_sel = st.selectbox("Filtrar Cliente para Reporte:", sorted(df_actual["CLIENTES"].unique()))
+        cli_sel = st.selectbox("Filtrar Cliente para Reporte:", sorted(df_actual["CLIENTES"].unique()), key="rep_cli")
         df_cli = df_actual[df_actual["CLIENTES"] == cli_sel].copy()
         df_cli["TIEMPO_RES"] = pd.to_numeric(df_cli["TIEMPO_RES"], errors='coerce').fillna(0)
         
-        # Agrupar datos
         resumen = df_cli.groupby(["CLIENTES", "USUARIO", "MODULO"])["TIEMPO_RES"].sum().reset_index()
         st.dataframe(resumen, use_container_width=True)
         
@@ -197,7 +240,6 @@ with tab4:
         total_horas = total_minutos / 60
         st.metric("Total Tiempo", f"{total_minutos} min (~{total_horas:.2f} hs)")
 
-        # SOLUCIÓN AL ERROR APPEND: Usamos pd.concat()
         fila_total = pd.DataFrame([{"CLIENTES": "TOTAL", "USUARIO": "-", "MODULO": "-", "TIEMPO_RES": total_minutos}])
         df_final_res = pd.concat([resumen, fila_total], ignore_index=True)
         df_final_res["HORAS_TOTAL"] = df_final_res["TIEMPO_RES"] / 60
