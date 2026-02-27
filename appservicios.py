@@ -13,7 +13,6 @@ st.set_page_config(page_title="Gestión de Tickets - GR Consulting", layout="wid
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# MEMORIA DE NAVEGACIÓN
 if "menu_activo" not in st.session_state:
     st.session_state.menu_activo = "➕ NUEVO"
 
@@ -30,7 +29,6 @@ usuario_pc = getpass.getuser().upper()
 try:
     df_actual = obtener_datos()
     if not df_actual.empty:
-        # Normalización de datos para filtros y cálculos
         df_actual["ANIO"] = pd.to_numeric(df_actual["ANIO"], errors='coerce').fillna(0).astype(int)
         df_actual["MES"] = pd.to_numeric(df_actual["MES"], errors='coerce').fillna(0).astype(int)
         df_actual["TIEMPO_RES"] = pd.to_numeric(df_actual["TIEMPO_RES"], errors='coerce').fillna(0)
@@ -52,11 +50,7 @@ if cols[3].button("📊 REPORTES", use_container_width=True): st.session_state.m
 st.markdown(f"📍 Estás en: **{st.session_state.menu_activo}**")
 st.divider()
 
-# ==========================================
-# SECCIONES OPERATIVAS
-# ==========================================
-
-# --- SECCIÓN: NUEVO ---
+# --- SECCIÓN: NUEVO TICKET ---
 if st.session_state.menu_activo == "➕ NUEVO":
     proximo_id = int(df_actual["ID_NUM"].max()) + 1 if not df_actual.empty else 1
     with st.form("form_nuevo", clear_on_submit=True):
@@ -93,7 +87,7 @@ if st.session_state.menu_activo == "➕ NUEVO":
                 conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=pd.concat([obtener_datos(), nuevo_reg], ignore_index=True))
                 st.balloons(); st.rerun()
 
-# --- SECCIÓN: MODIFICAR ---
+# --- SECCIÓN: MODIFICAR TICKET ---
 elif st.session_state.menu_activo == "✏️ MODIFICAR":
     if not df_actual.empty:
         pend = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
@@ -108,10 +102,10 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                 fila_idx = df_actual.index[df_actual["ID_NUM"] == id_m].tolist()[0]
                 dm = df_actual.loc[fila_idx]
                 with st.form("form_edit"):
-                    st.warning(f"🕒 Modificado: {dm['ULTIMA_MODIF']} por {dm['MODIFICADO_POR']}")
+                    st.warning(f"🕒 Última Modificación: {dm['ULTIMA_MODIF']} por {dm['MODIFICADO_POR']}")
                     ce1, ce2, ce3 = st.columns(3)
                     with ce1:
-                        est_m = st.selectbox("Nuevo Estado", ["ABIERTO", "EN PROCESO", "CERRADO"])
+                        est_m = st.selectbox("Estado", ["ABIERTO", "EN PROCESO", "CERRADO"])
                         t_m = st.number_input("Tiempo (min)", value=int(float(dm["TIEMPO_RES"])))
                     with ce2:
                         st.text_input("Usuario", value=dm["USUARIO"], disabled=True)
@@ -131,7 +125,7 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                         conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual.drop(columns=["ID_NUM"], errors="ignore"))
                         st.rerun()
 
-# --- SECCIÓN: CONSULTAR ---
+# --- SECCIÓN: CONSULTAR TICKETS ---
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
     st.header("🔍 Búsqueda Histórica")
     c1, c2, c3 = st.columns(3)
@@ -152,9 +146,9 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
         with st.container(border=True):
             st.subheader(f"🔍 Ficha Ticket #{id_c}")
             v1, v2, v3 = st.columns(3)
-            with v1: st.text_input("Atendido por", dc["CONSULTOR"], disabled=True); st.text_input("Estado", dc["ESTADO"], disabled=True)
-            with v2: st.text_input("Cliente", dc["CLIENTES"], disabled=True); st.text_input("Usuario Registrado", dc["USUARIO"], disabled=True)
-            with v3: st.text_input("Fecha Consulta", dc["FE_CONSULT"], disabled=True); st.text_input("Tiempo (min)", str(dc["TIEMPO_RES"]), disabled=True)
+            with v1: st.text_input("Consultor", dc["CONSULTOR"], disabled=True); st.text_input("Estado", dc["ESTADO"], disabled=True)
+            with v2: st.text_input("Cliente", dc["CLIENTES"], disabled=True); st.text_input("Usuario", dc["USUARIO"], disabled=True)
+            with v3: st.text_input("Fecha", dc["FE_CONSULT"], disabled=True); st.text_input("Tiempo (min)", str(dc["TIEMPO_RES"]), disabled=True)
             st.text_area("Consulta", dc["CONSULTAS"], disabled=True); st.text_area("Respuesta", dc["RESPUESTAS"], disabled=True)
             
             pdf = FPDF()
@@ -173,7 +167,9 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
             pdf.set_font("Arial", size=10); pdf.multi_cell(0, 8, txt=str(dc["RESPUESTAS"]), border=1)
             st.download_button("📥 Descargar PDF", pdf.output(dest='S').encode('latin-1'), f"Reporte_{id_c}.pdf")
 
-# --- SECCIÓN: REPORTES ---
+# ==========================================
+# SECCIÓN 4: REPORTES ANALÍTICOS (CON ENCABEZADO DE FILTROS)
+# ==========================================
 else:
     st.header("📊 Reportes Operativos")
     f1, f2, f3 = st.columns(3)
@@ -183,7 +179,7 @@ else:
     
     df_rep = df_actual.copy()
     if f_cli: df_rep = df_rep[df_rep["CLIENTES"].isin(f_cli)]
-    if f_mod: df_rep = df_rep[df_mod["MODULO"].isin(f_mod)]
+    if f_mod: df_rep = df_rep[df_rep["MODULO"].isin(f_mod)]
     if f_con: df_rep = df_rep[df_rep["CONSULTOR"].isin(f_con)]
     if f_ani: df_rep = df_rep[df_rep["ANIO"].isin(f_ani)]
     if f_mes: df_rep = df_rep[df_rep["MES"].isin(f_mes)]
@@ -198,7 +194,7 @@ else:
         st.dataframe(res_agrupado, use_container_width=True, hide_index=True)
         
         st.divider()
-        st.subheader("📥 Exportar Reporte")
+        st.subheader("📥 Exportar Reporte Personalizado")
         tipo_ex = st.radio("Nivel de detalle para Excel:", ["Agrupado (Resumen)", "Detallado (Ticket por Ticket)"], horizontal=True)
         
         col_ex1, col_ex2 = st.columns(2)
@@ -209,31 +205,48 @@ else:
                     res_agrupado.to_excel(w, index=False, sheet_name='Resumen_Agrupado')
                     nombre_f = "Reporte_Agrupado_GR.xlsx"
                 else:
-                    # DETALLADO: Consultas y Respuestas al FINAL
-                    columnas_det = ["ID_TICKET", "FE_CONSULT", "CLIENTES", "USUARIO", "CONSULTOR", "MODULO", "TIEMPO_RES"]
+                    columnas_det = ["ID_TICKET", "FE_CONSULT", "CLIENTES", "USUARIO", "CONSULTOR", "MODULO", "CONSULTAS", "RESPUESTAS", "TIEMPO_RES"]
                     df_detallado = df_rep[columnas_det].copy()
                     df_detallado["TIEMPO_HS"] = (df_detallado["TIEMPO_RES"] / 60).round(2)
-                    # Agregamos las de texto al final
-                    df_detallado["CONSULTAS"] = df_rep["CONSULTAS"]
-                    df_detallado["RESPUESTAS"] = df_rep["RESPUESTAS"]
                     df_detallado.to_excel(w, index=False, sheet_name='Detalle_Tickets')
                     nombre_f = "Reporte_Detallado_GR.xlsx"
-            st.download_button(label="📥 Excel (.xlsx)", data=buf.getvalue(), file_name=nombre_f)
+            st.download_button(label="📥 Descargar Excel (.xlsx)", data=buf.getvalue(), file_name=nombre_f)
 
         with col_ex2:
+            # --- PDF CON ENCABEZADO DE FILTROS ---
             pdf_r = FPDF()
-            pdf_r.add_page(); pdf_r.set_draw_color(180, 180, 180); pdf_r.set_font("Arial", 'B', 16)
+            pdf_r.add_page(); pdf_r.set_draw_color(180, 180, 180)
+            
+            # Título
+            pdf_r.set_font("Arial", 'B', 16)
             pdf_r.cell(0, 15, txt="GR Consulting - Resumen Analítico", ln=True, align='C')
+            
+            # BLOQUE DE FILTROS (Encabezado solicitado)
             pdf_r.set_font("Arial", 'B', 10); pdf_r.set_fill_color(245, 245, 245)
             pdf_r.cell(0, 8, "FILTROS UTILIZADOS:", 1, ln=True, align='L', fill=True)
             pdf_r.set_font("Arial", size=9)
-            pdf_r.multi_cell(0, 7, txt=f"Clientes: {', '.join(f_cli) if f_cli else 'TODOS'}", border=1)
-            pdf_r.multi_cell(0, 7, txt=f"Consultores: {', '.join(f_con) if f_con else 'TODOS'}", border=1)
-            pdf_r.multi_cell(0, 7, txt=f"Periodo: {', '.join([mes_d[m] for m in f_mes]) if f_mes else 'TODOS'} / {', '.join(map(str, f_ani)) if f_ani else 'TODOS'}", border=1)
-            pdf_r.ln(5); pdf_r.set_font("Arial", 'B', 9)
+            
+            txt_cli = ", ".join(f_cli) if f_cli else "TODOS"
+            txt_con = ", ".join(f_con) if f_con else "TODOS"
+            txt_mod = ", ".join(f_mod) if f_mod else "TODOS"
+            txt_ani = ", ".join(map(str, f_ani)) if f_ani else "TODOS"
+            txt_mes = ", ".join([mes_d[m] for m in f_mes]) if f_mes else "TODOS"
+            
+            pdf_r.multi_cell(0, 7, txt=f"Clientes: {txt_cli}", border=1)
+            pdf_r.multi_cell(0, 7, txt=f"Consultores: {txt_con}", border=1)
+            pdf_r.multi_cell(0, 7, txt=f"Modulos: {txt_mod}", border=1)
+            pdf_r.multi_cell(0, 7, txt=f"Periodo: {txt_mes} / {txt_ani}", border=1)
+            
+            pdf_r.ln(10)
+            # Tabla de resultados
+            pdf_r.set_font("Arial", 'B', 9)
             pdf_r.cell(50, 8, "Cliente", 1); pdf_r.cell(40, 8, "Modulo", 1); pdf_r.cell(40, 8, "Consultor", 1); pdf_r.cell(25, 8, "Minutos", 1); pdf_r.cell(25, 8, "Horas", 1); pdf_r.ln()
             pdf_r.set_font("Arial", size=8)
             for i, row in res_agrupado.head(35).iterrows():
                 pdf_r.cell(50, 8, str(row['CLIENTES'])[:22], 1); pdf_r.cell(40, 8, str(row['MODULO'])[:18], 1)
-                pdf_r.cell(40, 8, str(row['CONSULTOR'])[:18], 1); pdf_r.cell(25, 8, str(row['TIEMPO_RES']), 1); pdf_r.cell(25, 8, str(row['HORAS']), 1); pdf_r.ln()
-            st.download_button("📥 PDF Analítico", pdf_r.output(dest='S').encode('latin-1'), "Reporte_Analitico_GR.pdf")
+                pdf_r.cell(40, 8, str(row['CONSULTOR'])[:18], 1); pdf_r.cell(25, 8, str(row['TIEMPO_RES']), 1)
+                pdf_r.cell(25, 8, str(row['HORAS']), 1); pdf_r.ln()
+            
+            pdf_r.ln(5); pdf_r.set_font("Arial", 'B', 10)
+            pdf_r.cell(0, 10, f"TOTAL FILTRADO: {t_min} min / {t_hs:.2f} hs", ln=True)
+            st.download_button("📥 Descargar PDF Analítico", pdf_r.output(dest='S').encode('latin-1'), "Reporte_Analitico_GR.pdf")
