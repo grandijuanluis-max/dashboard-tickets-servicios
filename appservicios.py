@@ -6,7 +6,7 @@ from datetime import datetime
 st.set_page_config(page_title="Sistema de Tickets - Servicios", layout="wide")
 
 # URL de tu Google Sheets (Recuerda que debe estar en "Cualquier persona con el enlace")
-url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/edit?gid=0#gid=0"
+url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/edit#gid=0"
 
 # Establecemos la conexión
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -22,15 +22,15 @@ with st.expander("➕ Cargar Nuevo Ticket / Consulta", expanded=True):
         with col1:
             id_ticket = st.text_input("ID Ticket")
             consultor = st.text_input("Consultor")
-            tipo_cons = st.selectbox("Tipo de Consulta", ["Técnica", "Funcional", "Comercial"])
+            tipo_cons = st.selectbox("Tipo de Consulta", ["Funcional", "Técnica", "Comercial"])
             prioridad = st.select_slider("Prioridad", options=["Baja", "Media", "Alta"])
             estado = st.selectbox("Estado", ["Abierto", "En Proceso", "Cerrado"])
 
         with col2:
-            atencion = st.text_input("Atención")
+            atencion = st.selectbox("Atención", ["Telefónica", "Wasapp", "Meet", "Visita"])
             clientes = st.text_input("Cliente")
             usuario = st.text_input("Usuario")
-            modulo = st.text_input("Módulo")
+            modulo = st.selectbox("Módulo", ["Accesos", "Administracion", "Contabilidad", "Compras", "Ventas", "Logistica", "Eccomerce", "Mails", "Programa", "Produccion","Servidor", "Web", "Gerencial", "RRHH", "Sucursal", "Otros"])
             online = st.checkbox("¿Es consulta Online?")
 
         with col3:
