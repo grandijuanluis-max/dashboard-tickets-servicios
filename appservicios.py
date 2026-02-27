@@ -13,7 +13,6 @@ url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAE
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def obtener_datos():
-    # ttl=0 para lectura en tiempo real sin caché
     df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
     df.columns = df.columns.str.strip()
     return df
@@ -58,12 +57,11 @@ with tab1:
             tiempo_res = st.number_input("Tiempo Respuesta (horas/min)", min_value=0)
 
         st.divider()
-        consultas = st.text_area("Detalle de la Consulta (Permite minúsculas)")
-        respuestas = st.text_area("Detalle de la Respuesta (Permite minúsculas)")
+        consultas = st.text_area("Detalle de la Consulta")
+        respuestas = st.text_area("Detalle de la Respuesta")
         enviar = st.form_submit_button("Guardar Registro")
 
     if enviar:
-        # Aquí aplicamos .upper() a todos los campos de texto excepto consultas y respuestas
         df_nuevo = pd.DataFrame([{
             "ID_TICKET": proximo_id,
             "CONSULTOR": consultor.upper(),
@@ -76,8 +74,8 @@ with tab1:
             "FE_CONSULT": str(fe_consult),
             "FE_RTA": str(fe_rta),
             "MODULO": modulo.upper(),
-            "CONSULTAS": consultas, # Sin .upper()
-            "RESPUESTAS": respuestas, # Sin .upper()
+            "CONSULTAS": consultas,
+            "RESPUESTAS": respuestas,
             "TIEMPO_RES": tiempo_res,
             "ONLINE": "SI" if online else "NO",
             "ANIO": int(fe_consult.year),
@@ -88,58 +86,94 @@ with tab1:
             df_final = pd.concat([obtener_datos(), df_nuevo], ignore_index=True)
             conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_final)
             st.balloons()
-            st.success(f"✅ Ticket #{proximo_id} guardado en MAYÚSCULAS.")
+            st.success(f"✅ Ticket #{proximo_id} guardado.")
             st.rerun() 
         except Exception as e:
             st.error(f"❌ Error al guardar: {e}")
 
 # ==========================================
-# TAB 2: MODIFICAR TICKET
+# TAB 2: MODIFICAR TICKET (Buscador Avanzado)
 # ==========================================
 with tab2:
-    st.subheader("Modificar Tickets Pendientes")
+    st.subheader("Búsqueda y Edición de Tickets")
     
     if not df_actual.empty:
-        pendientes = df_actual[df_actual["ESTADO"].isin(["ABIERTO", "EN PROCESO", "Abierto", "En Proceso"])]
+        # Filtramos los que están abiertos o en proceso
+        pendientes = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])]
         
         if not pendientes.empty:
-            opciones = pendientes.apply(lambda x: f"Ticket #{int(float(x['ID_TICKET']))} | {x['CLIENTES']}", axis=1).tolist()
-            seleccion = st.selectbox("Selecciona el ticket:", opciones)
+            # Creamos una etiqueta detallada: ID | Cliente | Usuario | Primer renglón de consulta
+            def crear_etiqueta(row):
+                primer_renglon = str(row['CONSULTAS']).split('\n')[0][:50] # Primeros 50 caracteres del primer renglón
+                return f"#{int(float(row['ID_TICKET']))} | {row['CLIENTES']} | {row['USUARIO']} | Obs: {primer_renglon}..."
+
+            opciones = pendientes.apply(crear_etiqueta, axis=1).tolist()
+            seleccion = st.selectbox("Selecciona el ticket que deseas modificar:", opciones)
             
-            # Conversión segura del ID (String -> Float -> Int)
-            id_sel = int(float(seleccion.split(" | ")[0].replace("Ticket #", "")))
-            
+            # Extraer el ID para buscar los datos
+            id_sel = int(float(seleccion.split(" | ")[0].replace("#", "")))
             fila_idx = df_actual.index[df_actual["ID_TICKET"].astype(float).astype(int) == id_sel].tolist()[0]
-            datos_viejos = df_actual.loc[fila_idx]
+            d = df_actual.loc[fila_idx] # 'd' contiene todos los datos actuales
 
-            with st.form("edit_form"):
-                st.info(f"Editando Ticket ID: {id_sel}")
-                col_e1, col_e2 = st.columns(2)
-                with col_e1:
-                    nuevo_estado = st.selectbox("Nuevo Estado", ["Abierto", "En Proceso", "Cerrado"], 
-                                                index=["ABIERTO", "EN PROCESO", "CERRADO", "Abierto", "En Proceso", "Cerrado"].index(datos_viejos["ESTADO"]) % 3)
-                    nueva_prioridad = st.select_slider("Nueva Prioridad", options=["Baja", "Media", "Alta"],
-                                                       value=datos_viejos["PRIORIDAD"].capitalize())
-                with col_e2:
-                    nueva_fecha_rta = st.date_input("Nueva Fecha Respuesta", datetime.now())
-                    nuevo_tiempo = st.number_input("Tiempo Total", value=int(float(datos_viejos["TIEMPO_RES"])))
+            # Formulario de Edición Completo
+            with st.form("edit_form_avanzado"):
+                st.markdown(f"### ✏️ Editando Ticket **#{id_sel}**")
                 
-                nueva_respuesta_det = st.text_area("Actualizar Detalle de Respuesta", value=datos_viejos["RESPUESTAS"])
-                boton_upd = st.form_submit_button("Guardar Cambios")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    e_consultor = st.text_input("Consultor", value=d["CONSULTOR"])
+                    # Buscamos el índice actual para el selectbox
+                    lista_estados = ["ABIERTO", "EN PROCESO", "CERRADO"]
+                    idx_estado = lista_estados.index(d["ESTADO"].upper()) if d["ESTADO"].upper() in lista_estados else 0
+                    e_estado = st.selectbox("Estado", lista_estados, index=idx_estado)
+                    e_prioridad = st.select_slider("Prioridad", options=["BAJA", "MEDIA", "ALTA"], value=d["PRIORIDAD"].upper())
+                
+                with c2:
+                    e_cliente = st.text_input("Cliente", value=d["CLIENTES"])
+                    e_usuario = st.text_input("Usuario", value=d["USUARIO"])
+                    e_modulo = st.text_input("Módulo", value=d["MODULO"])
+                    e_online = st.checkbox("¿Se resolvió Online?", value=(True if d["ONLINE"] == "SI" else False))
 
-            if boton_upd:
+                with c3:
+                    # Convertimos strings de la base a objetos date para los selectores
+                    f_cons_dt = datetime.strptime(str(d["FE_CONSULT"]), '%Y-%m-%d') if d["FE_CONSULT"] else datetime.now()
+                    f_rta_dt = datetime.strptime(str(d["FE_RTA"]), '%Y-%m-%d') if d["FE_RTA"] else datetime.now()
+                    
+                    e_fe_consult = st.date_input("Fecha Consulta", f_cons_dt)
+                    e_fe_rta = st.date_input("Fecha Respuesta", f_rta_dt)
+                    e_tiempo = st.number_input("Tiempo Respuesta (horas/min)", value=int(float(d["TIEMPO_RES"])))
+
+                st.divider()
+                e_consultas = st.text_area("Detalle de la Consulta", value=d["CONSULTAS"])
+                e_respuestas = st.text_area("Detalle de la Respuesta", value=d["RESPUESTAS"])
+                
+                btn_update = st.form_submit_button("🔥 GUARDAR CAMBIOS")
+
+            if btn_update:
                 try:
-                    # Al actualizar también convertimos a MAYÚSCULAS
-                    df_actual.at[fila_idx, "ESTADO"] = nuevo_estado.upper()
-                    df_actual.at[fila_idx, "PRIORIDAD"] = nueva_prioridad.upper()
-                    df_actual.at[fila_idx, "FE_RTA"] = str(nueva_fecha_rta)
-                    df_actual.at[fila_idx, "TIEMPO_RES"] = nuevo_tiempo
-                    df_actual.at[fila_idx, "RESPUESTAS"] = nueva_respuesta_det # Se mantiene original
+                    # Aplicamos Mayúsculas a los campos editados (excepto textos largos)
+                    df_actual.at[fila_idx, "CONSULTOR"] = e_consultor.upper()
+                    df_actual.at[fila_idx, "ESTADO"] = e_estado.upper()
+                    df_actual.at[fila_idx, "PRIORIDAD"] = e_prioridad.upper()
+                    df_actual.at[fila_idx, "CLIENTES"] = e_cliente.upper()
+                    df_actual.at[fila_idx, "USUARIO"] = e_usuario.upper()
+                    df_actual.at[fila_idx, "MODULO"] = e_modulo.upper()
+                    df_actual.at[fila_idx, "ONLINE"] = "SI" if e_online else "NO"
+                    df_actual.at[fila_idx, "FE_CONSULT"] = str(e_fe_consult)
+                    df_actual.at[fila_idx, "FE_RTA"] = str(e_fe_rta)
+                    df_actual.at[fila_idx, "TIEMPO_RES"] = e_tiempo
+                    df_actual.at[fila_idx, "CONSULTAS"] = e_consultas
+                    df_actual.at[fila_idx, "RESPUESTAS"] = e_respuestas
+                    # Actualizamos Año y Mes por si cambiaron la fecha de consulta
+                    df_actual.at[fila_idx, "ANIO"] = int(e_fe_consult.year)
+                    df_actual.at[fila_idx, "MES"] = int(e_fe_consult.month)
                     
                     conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual)
-                    st.success(f"✅ Ticket #{id_sel} actualizado en MAYÚSCULAS.")
+                    st.success(f"✅ ¡Ticket #{id_sel} actualizado correctamente en la base!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Error al actualizar: {e}")
         else:
-            st.info("No hay tickets pendientes.")
+            st.info("No hay tickets pendientes para modificar.")
+    else:
+        st.warning("La base de datos está vacía.")
