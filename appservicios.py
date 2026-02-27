@@ -9,10 +9,11 @@ from fpdf import FPDF
 # Configuración de la página
 st.set_page_config(page_title="Gestión de Tickets", layout="wide")
 
-# 1. Conexión y Control de Estado
+# 1. Conexión y Control de Estado de Navegación
 url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# MEMORIA DE NAVEGACIÓN
 if "menu_activo" not in st.session_state:
     st.session_state.menu_activo = "➕ NUEVO"
 if "db_estandarizada" not in st.session_state:
@@ -39,15 +40,18 @@ except Exception as e:
     df_actual = pd.DataFrame()
 
 # ==========================================
-# MENÚ DE NAVEGACIÓN
+# TÍTULO Y MENÚ DE NAVEGACIÓN
 # ==========================================
-st.markdown("### 🖥️ Panel de Control")
+st.title("📋 Sistema de Gestión de Consultas y Tickets")
+
 cols = st.columns(4)
 if cols[0].button("➕ NUEVO TICKET", use_container_width=True): st.session_state.menu_activo = "➕ NUEVO"
 if cols[1].button("✏️ MODIFICAR TICKET", use_container_width=True): st.session_state.menu_activo = "✏️ MODIFICAR"
 if cols[2].button("🔍 CONSULTAR TICKETS", use_container_width=True): st.session_state.menu_activo = "🔍 CONSULTAR"
 if cols[3].button("📊 REPORTES", use_container_width=True): st.session_state.menu_activo = "📊 REPORTES"
 
+# Indicador de sección solicitada
+st.markdown(f"📍 Estás en: **{st.session_state.menu_activo}**")
 st.divider()
 
 # ==========================================
@@ -137,25 +141,22 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                     st.rerun()
 
 # ==========================================
-# SECCIÓN: CONSULTAR (CON REPORTE PDF COMPLETO)
+# SECCIÓN: CONSULTAR
 # ==========================================
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
-    # LÓGICA DEL BOTÓN DE ESTANDARIZACIÓN
     if not st.session_state.db_estandarizada:
-        if st.button("🧹 ESTANDARIZAR BASE DE DATOS (Una sola vez)"):
-            with st.spinner("Normalizando registros históricos..."):
-                df_l = df_actual.copy()
-                textos = ["CONSULTOR", "TIPO_CONS", "PRIORIDAD", "ESTADO", "ATENCION", "CLIENTES", "USUARIO", "MODULO"]
-                for c in textos:
-                    if c in df_l.columns: df_l[c] = df_l[c].astype(str).str.upper().str.strip().replace("NAN", "")
-                for c in ["FE_CONSULT", "FE_RTA"]:
-                    if c in df_l.columns: df_l[c] = df_l[c].apply(limpiar_fecha)
-                conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_l)
-                st.session_state.db_estandarizada = True
-                st.success("✅ ¡Base de datos corregida! El botón desaparecerá ahora.")
-                st.rerun()
+        if st.button("🧹 ESTANDARIZAR BASE DE DATOS"):
+            df_l = df_actual.copy()
+            textos = ["CONSULTOR", "TIPO_CONS", "PRIORIDAD", "ESTADO", "ATENCION", "CLIENTES", "USUARIO", "MODULO"]
+            for c in textos:
+                if c in df_l.columns: df_l[c] = df_l[c].astype(str).str.upper().str.strip().replace("NAN", "")
+            for c in ["FE_CONSULT", "FE_RTA"]:
+                if c in df_l.columns: df_l[c] = df_l[c].apply(limpiar_fecha)
+            conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_l)
+            st.session_state.db_estandarizada = True
+            st.success("✅ Base corregida.")
+            st.rerun()
 
-    st.header("🔍 Consulta General")
     if not df_actual.empty:
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -179,61 +180,73 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
             id_c = int(sel_c.split(" | ")[0].replace("#", ""))
             dc = df_f[df_f["ID_NUM"] == id_c].iloc[0]
             
-            # --- VISTA EN PANTALLA (Inclusión de Tiempo y Usuario) ---
             with st.container(border=True):
-                st.subheader(f"🔍 Ficha Ticket #{id_c}")
+                st.subheader(f"Ficha Ticket #{id_c}")
                 v1, v2, v3 = st.columns(3)
                 with v1:
-                    st.text_input("Atendido por (Consultor)", value=dc["CONSULTOR"], disabled=True)
+                    st.text_input("Consultor (Atención)", value=dc["CONSULTOR"], disabled=True)
                     st.text_input("Estado", value=dc["ESTADO"], disabled=True)
                 with v2:
                     st.text_input("Cliente", value=dc["CLIENTES"], disabled=True)
                     st.text_input("Usuario Registrado", value=dc["USUARIO"], disabled=True)
                 with v3:
                     st.text_input("Fecha Consulta", value=dc["FE_CONSULT"], disabled=True)
-                    st.text_input("Tiempo de Resolución (min)", value=str(dc["TIEMPO_RES"]), disabled=True)
+                    st.text_input("Tiempo (min)", value=str(dc["TIEMPO_RES"]), disabled=True)
                 
-                st.text_area("Detalle de la Consulta", value=dc["CONSULTAS"], disabled=True)
-                st.text_area("Detalle de la Respuesta", value=dc["RESPUESTAS"], disabled=True)
+                st.text_area("Consulta", value=dc["CONSULTAS"], disabled=True)
+                st.text_area("Respuesta", value=dc["RESPUESTAS"], disabled=True)
                 
-                # --- GENERACIÓN DE PDF COMPLETO ---
+                # --- PDF REDISEÑADO (Bello con recuadros) ---
                 pdf = FPDF()
                 pdf.add_page()
-                pdf.set_font("Arial", 'B', 16)
-                pdf.cell(200, 10, txt=f"REPORTE DE TICKET #{id_c}", ln=True, align='C')
+                pdf.set_draw_color(180, 180, 180) # Gris suave para líneas
+                
+                # Encabezado
+                pdf.set_font("Arial", 'B', 18)
+                pdf.cell(0, 15, txt="GR Consulting - Servicios", ln=True, align='C')
+                pdf.set_font("Arial", 'B', 12)
+                pdf.cell(0, 10, txt=f"Ticket #{id_c}", ln=True, align='L')
+                pdf.ln(5)
+
+                # Cuadrícula de Datos Generales
+                pdf.set_font("Arial", 'B', 10)
+                # Fila 1
+                pdf.cell(60, 10, "ATENDIDO POR:", 1); pdf.cell(130, 10, str(dc['CONSULTOR']), 1, ln=True)
+                # Fila 2
+                pdf.cell(60, 10, "CLIENTE:", 1); pdf.cell(130, 10, str(dc['CLIENTES']), 1, ln=True)
+                # Fila 3
+                pdf.cell(60, 10, "USUARIO:", 1); pdf.cell(130, 10, str(dc['USUARIO']), 1, ln=True)
+                # Fila 4
+                pdf.cell(60, 10, "FECHA:", 1); pdf.cell(65, 10, str(dc['FE_CONSULT']), 1); pdf.cell(30, 10, "ESTADO:", 1); pdf.cell(35, 10, str(dc['ESTADO']), 1, ln=True)
+                # Fila 5
+                pdf.cell(60, 10, "TIEMPO (min):", 1); pdf.cell(130, 10, f"{dc['TIEMPO_RES']} minutos", 1, ln=True)
+                
                 pdf.ln(10)
                 
-                pdf.set_font("Arial", 'B', 12)
-                pdf.cell(0, 10, txt=f"QUIEN LO ATENDIO: {dc['CONSULTOR']}", ln=True)
-                pdf.cell(0, 10, txt=f"CLIENTE: {dc['CLIENTES']}", ln=True)
-                pdf.cell(0, 10, txt=f"USUARIO: {dc['USUARIO']}", ln=True)
-                pdf.cell(0, 10, txt=f"FECHA DE CONSULTA: {dc['FE_CONSULT']}", ln=True)
-                pdf.cell(0, 10, txt=f"ESTADO: {dc['ESTADO']}", ln=True)
-                pdf.cell(0, 10, txt=f"TIEMPO DE RESOLUCION: {dc['TIEMPO_RES']} minutos", ln=True)
+                # Cuadros de texto para Consulta y Respuesta
+                pdf.set_font("Arial", 'B', 11)
+                pdf.cell(0, 8, "DETALLE DE LA CONSULTA:", ln=True)
+                pdf.set_font("Arial", size=10)
+                pdf.multi_cell(0, 8, txt=str(dc["CONSULTAS"]), border=1)
+                
                 pdf.ln(5)
                 
-                pdf.set_font("Arial", 'B', 12)
-                pdf.cell(0, 10, txt="DETALLE DE LA CONSULTA:", ln=True)
-                pdf.set_font("Arial", size=11)
-                pdf.multi_cell(0, 8, txt=str(dc["CONSULTAS"]))
-                pdf.ln(5)
+                pdf.set_font("Arial", 'B', 11)
+                pdf.cell(0, 8, "RESPUESTA DEL CONSULTOR:", ln=True)
+                pdf.set_font("Arial", size=10)
+                pdf.multi_cell(0, 8, txt=str(dc["RESPUESTAS"]), border=1)
                 
-                pdf.set_font("Arial", 'B', 12)
-                pdf.cell(0, 10, txt="RESPUESTA:", ln=True)
-                pdf.set_font("Arial", size=11)
-                pdf.multi_cell(0, 8, txt=str(dc["RESPUESTAS"]))
-                
-                st.download_button("📥 Descargar PDF Completo", pdf.output(dest='S').encode('latin-1'), f"Reporte_Ticket_{id_c}.pdf")
-        else: st.info("No hay tickets en este rango.")
+                st.download_button("📥 Descargar Reporte PDF", pdf.output(dest='S').encode('latin-1'), f"Reporte_Ticket_{id_c}.pdf")
+        else: st.info("No hay resultados.")
 
 # --- SECCIÓN: REPORTES ---
 else:
-    st.header("📊 Reportes de Tiempo")
+    st.header("📊 Resumen de Tiempos")
     if not df_actual.empty:
-        c_r = st.selectbox("Elegir Cliente:", sorted(df_actual["CLIENTES"].unique()))
+        c_r = st.selectbox("Filtrar por Cliente:", sorted(df_actual["CLIENTES"].unique()))
         df_r = df_actual[df_actual["CLIENTES"] == c_r].copy()
         df_r["TIEMPO_RES"] = pd.to_numeric(df_r["TIEMPO_RES"], errors='coerce').fillna(0)
         res = df_r.groupby(["CLIENTES", "USUARIO", "MODULO"])["TIEMPO_RES"].sum().reset_index()
         st.table(res)
         tot = res["TIEMPO_RES"].sum()
-        st.metric("Acumulado", f"{tot} min", f"{tot/60:.2f} hs")
+        st.metric("Total", f"{tot} min", f"{tot/60:.2f} hs")
