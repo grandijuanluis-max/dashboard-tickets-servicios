@@ -26,7 +26,7 @@ def obtener_config():
         df = conn.read(spreadsheet=url, worksheet="Config_Consultores", ttl=0)
         df.columns = [str(c).strip().upper() for c in df.columns]
         for col in df.columns:
-            # Limpieza para asegurar acceso de JUANLUIS y otros
+            # Limpieza agresiva para asegurar acceso (Caso JUANLUIS 2371)
             df[col] = df[col].astype(str).str.strip().str.upper().str.replace(r"\.0$", "", regex=True)
         return df
     except: return pd.DataFrame()
@@ -53,7 +53,7 @@ def registrar_auditoria(id_ticket, accion, consultor):
     except: pass
 
 # ==========================================
-# 🔐 LOGIN (SISTEMA BLINDADO)
+# 🔐 LOGIN (VALIDACIÓN BLINDADA)
 # ==========================================
 if not st.session_state.autenticado:
     st.title("🔐 Acceso GR Consulting")
@@ -74,6 +74,7 @@ if not st.session_state.autenticado:
 nombre_consultor = st.session_state.usuario_logueado
 df_actual = obtener_datos_tickets()
 df_config = obtener_config()
+# Extraemos info del usuario actual para validar el ROL
 user_info = df_config[df_config["CONSULTOR"] == nombre_consultor].iloc[0]
 
 # SIDEBAR: Filtros Maestros
@@ -89,7 +90,7 @@ with st.sidebar:
     f_ani = st.multiselect("Años:", sorted(df_actual["ANIO"].unique(), reverse=True))
     f_mes = st.multiselect("Meses:", options=list(mes_d.keys()), format_func=lambda x: mes_d[x])
 
-# Dataframe Filtrado Maestro (df_f)
+# Dataframe Filtrado Maestro (df_f) que afecta a todas las solapas
 df_f = df_actual.copy()
 if f_cli: df_f = df_f[df_f["CLIENTES"].isin(f_cli)]
 if f_con: df_f = df_f[df_f["CONSULTOR"].isin(f_con)]
@@ -97,9 +98,13 @@ if f_mod: df_f = df_f[df_f["MODULO"].isin(f_mod)]
 if f_ani: df_f = df_f[df_f["ANIO"].isin(f_ani)]
 if f_mes: df_f = df_f[df_f["MES"].isin(f_mes)]
 
-# NAVEGACIÓN
+# NAVEGACIÓN DINÁMICA POR ROL
 btns = ["➕ NUEVO", "✏️ MODIFICAR", "🔍 CONSULTAR", "📊 REPORTES", "📈 DASHBOARDS"]
-if user_info.get("ROL") == "ADMIN": btns.append("⚙️ PERMISOS")
+# RESTRICCIÓN SOLICITADA: Solo ADMIN ve Permisos
+es_admin = str(user_info.get("ROL")).upper() == "ADMIN"
+if es_admin:
+    btns.append("⚙️ PERMISOS")
+
 cols_menu = st.columns(len(btns))
 for i, b in enumerate(btns):
     if cols_menu[i].button(b, use_container_width=True): st.session_state.menu_activo = b
@@ -134,41 +139,36 @@ if st.session_state.menu_activo == "➕ NUEVO":
                 registrar_auditoria(proximo_id, "ALTA", nombre_consultor); st.balloons(); st.rerun()
 
 # ==========================================
-# SECCIÓN 2: MODIFICAR (REVISADO)
+# SECCIÓN 2: MODIFICAR (SOLO ABIERTOS/PROCESO + FILTROS)
 # ==========================================
 elif st.session_state.menu_activo == "✏️ MODIFICAR":
-    # 1. Tomamos los datos que ya pasaron por los Filtros Maestros (df_f)
-    # 2. Filtramos solo los que están ABIERTOS o EN PROCESO
     df_mod_list = df_f[df_f["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
-    
     if not df_mod_list.empty:
-        sel_m = st.selectbox("Seleccione Ticket (Filtrado por Maestro + Estado):", df_mod_list.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {str(r['CONSULTAS'])[:40]}...", axis=1))
+        sel_m = st.selectbox("Seleccione Ticket Abierto:", df_mod_list.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {str(r['CONSULTAS'])[:40]}...", axis=1))
         id_m = int(sel_m.split(" |")[0].replace("#",""))
         idx_f = df_actual.index[df_actual["ID_NUM"] == id_m].tolist()[0]; dm = df_actual.loc[idx_f]
         with st.form("f_mod"):
-            st.warning(f"Modificando Ticket #{id_m}")
             c1, c2 = st.columns(2)
             n_est = c1.selectbox("Estado", ["ABIERTO", "EN PROCESO", "CERRADO"], index=["ABIERTO", "EN PROCESO", "CERRADO"].index(dm["ESTADO"]))
             n_tie = c2.number_input("Tiempo (min)", value=int(dm["TIEMPO_RES"]))
             n_con = st.text_area("Consulta", value=dm["CONSULTAS"]); n_rta = st.text_area("Respuesta", value=dm["RESPUESTAS"])
-            if st.form_submit_button("🔥 ACTUALIZAR TICKET"):
+            if st.form_submit_button("🔥 ACTUALIZAR"):
                 df_actual.at[idx_f, "ESTADO"] = n_est; df_actual.at[idx_f, "TIEMPO_RES"] = n_tie
                 df_actual.at[idx_f, "CONSULTAS"] = n_con; df_actual.at[idx_f, "RESPUESTAS"] = n_rta
                 df_actual.at[idx_f, "ULTIMA_MODIF"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
                 conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual.drop(columns=["ID_NUM"], errors="ignore"))
-                registrar_auditoria(id_m, "MODIFICACION", nombre_consultor); st.success("Guardado."); st.rerun()
-    else:
-        st.info("No hay tickets ABIERTOS o EN PROCESO bajo los filtros seleccionados.")
+                registrar_auditoria(id_m, "MODIFICACION", nombre_consultor); st.success("Listo."); st.rerun()
+    else: st.info("No hay tickets pendientes bajo los filtros actuales.")
 
 # ==========================================
-# SECCIÓN 3: CONSULTAR (CON PDF TÉCNICO)
+# SECCIÓN 3: CONSULTAR (PDF TÉCNICO COMPLETO)
 # ==========================================
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
     if not df_f.empty:
         sel_c = st.selectbox("Ver Ficha:", df_f.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['FE_CONSULT']}", axis=1))
         id_c = int(sel_c.split(" |")[0].replace("#","")); dc = df_f[df_f["ID_NUM"] == id_c].iloc[0]
         with st.container(border=True):
-            st.subheader(f"Ficha #{id_c}"); st.info(f"**Consulta:** {dc['CONSULTAS']}"); st.success(f"**Respuesta:** {dc['RESPUESTAS']}")
+            st.subheader(f"Ticket #{id_c}"); st.info(f"**Consulta:** {dc['CONSULTAS']}"); st.success(f"**Respuesta:** {dc['RESPUESTAS']}")
             pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16); pdf.cell(0, 15, "GR Consulting - Reporte de Servicio", ln=True, align='C'); pdf.ln(5); pdf.set_font("Arial", size=10)
             pdf.cell(40, 10, "ATENDIDO POR:", 1); pdf.cell(150, 10, str(dc['CONSULTOR']), 1, ln=True)
             pdf.cell(40, 10, "CLIENTE:", 1); pdf.cell(150, 10, str(dc['CLIENTES']), 1, ln=True)
@@ -178,7 +178,7 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
             st.download_button("📥 PDF Ficha", pdf.output(dest='S').encode('latin-1'), f"Ticket_{id_c}.pdf")
 
 # ==========================================
-# SECCIÓN 4: REPORTES (TOTAL HS Y EXCEL DINÁMICO)
+# SECCIÓN 4: REPORTES (SUMATORIA PDF + EXCEL DINÁMICO)
 # ==========================================
 elif st.session_state.menu_activo == "📊 REPORTES":
     st.header("📊 Reportes de Gestión")
@@ -186,7 +186,7 @@ elif st.session_state.menu_activo == "📊 REPORTES":
         t_hs = df_f["TIEMPO_RES"].sum() / 60; st.metric("Total Horas Filtradas", f"{t_hs:,.2f} hs")
         res = df_f.groupby(["CLIENTES", "MODULO", "CONSULTOR"])["TIEMPO_RES"].sum().reset_index(); res["HORAS"] = (res["TIEMPO_RES"]/60).round(2)
         st.dataframe(res, use_container_width=True, hide_index=True)
-        c1, c2 = st.columns(2)
+        st.divider(); c1, c2 = st.columns(2)
         with c1:
             st.subheader("📥 Excel")
             tipo_xls = st.radio("Formato:", ["Resumido (Módulo)", "Detallado (Ticket)"], horizontal=True)
@@ -197,19 +197,19 @@ elif st.session_state.menu_activo == "📊 REPORTES":
                     df_det = df_f[["ID_TICKET", "FE_CONSULT", "CLIENTES", "MODULO", "CONSULTOR", "TIEMPO_RES"]].copy()
                     df_det["HORAS"] = (df_det["TIEMPO_RES"]/60).round(2); df_det["CONSULTAS"] = df_f["CONSULTAS"]; df_det["RESPUESTAS"] = df_f["RESPUESTAS"]
                     df_det.to_excel(w, index=False)
-            st.download_button("📥 Descargar Excel", buf.getvalue(), "GR_Reporte.xlsx")
+            st.download_button("📥 Descargar Excel", buf.getvalue(), f"GR_{tipo_xls.split()[0]}.xlsx")
         with c2:
             st.subheader("📥 PDF Analítico")
             pdf_a = FPDF(); pdf_a.add_page(); pdf_a.set_font("Arial", 'B', 11); pdf_a.cell(0, 8, "FILTROS UTILIZADOS:", ln=True); pdf_a.set_font("Arial", size=10)
-            pdf_a.cell(0, 6, f"Clientes: {', '.join(f_cli) if f_cli else 'TODOS'}", ln=True); pdf_a.ln(5)
+            pdf_a.cell(0, 6, f"Clientes: {', '.join(f_cli) if f_cli else 'TODOS'}", ln=True); pdf_a.ln(10)
             pdf_a.set_font("Arial", 'B', 14); pdf_a.cell(0, 10, "GR Consulting - Resumen Analítico", ln=True, align='C'); pdf_a.ln(5)
             pdf_a.set_font("Arial", 'B', 9); pdf_a.cell(45, 8, "Cliente", 1); pdf_a.cell(40, 8, "Modulo", 1); pdf_a.cell(45, 8, "Consultor", 1); pdf_a.cell(30, 8, "Horas", 1, ln=True); pdf_a.set_font("Arial", size=9)
             for _, r in res.iterrows(): pdf_a.cell(45, 7, str(r['CLIENTES']), 1); pdf_a.cell(40, 7, str(r['MODULO']), 1); pdf_a.cell(45, 7, str(r['CONSULTOR']), 1); pdf_a.cell(30, 7, str(r['HORAS']), 1, ln=True)
             pdf_a.ln(5); pdf_a.set_font("Arial", 'B', 12); pdf_a.cell(0, 10, f"TOTAL GENERAL: {t_hs:,.2f} hs", align='R')
-            st.download_button("📥 PDF Analítico", pdf_a.output(dest='S').encode('latin-1'), "Analitico_GR.pdf")
+            st.download_button("📥 PDF Analítico", pdf_a.output(dest='S').encode('latin-1'), "Reporte_GR.pdf")
 
 # ==========================================
-# SECCIÓN 5: DASHBOARDS (TODOS ABIERTOS)
+# SECCIÓN 5: DASHBOARDS (ABIERTOS PARA TODOS)
 # ==========================================
 elif st.session_state.menu_activo == "📈 DASHBOARDS":
     st.header("📈 Centro Operativo")
@@ -222,8 +222,11 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
     with tab3:
         df_dash["COSTO"] = (df_dash["TIEMPO_RES"]/60) * pd.to_numeric(df_dash["VALOR_HORA"]); st.metric("Inversión Total", f"$ {df_dash['COSTO'].sum():,.2f}"); st.bar_chart(df_dash.groupby("CLIENTES")["COSTO"].sum())
 
-# --- PERMISOS ---
-elif st.session_state.menu_activo == "⚙️ PERMISOS":
-    st.header("⚙️ Gestión de Usuarios")
+# ==========================================
+# SECCIÓN 6: PERMISOS (SOLO ADMIN)
+# ==========================================
+elif st.session_state.menu_activo == "⚙️ PERMISOS" and es_admin:
+    st.header("⚙️ Gestión de Usuarios (Acceso Administrador)")
     df_ed = st.data_editor(df_config, num_rows="dynamic", hide_index=True)
-    if st.button("💾 Guardar"): conn.update(spreadsheet=url, worksheet="Config_Consultores", data=df_ed); st.rerun()
+    if st.button("💾 Guardar Nueva Configuración"):
+        conn.update(spreadsheet=url, worksheet="Config_Consultores", data=df_ed); st.success("Cambios aplicados."); st.rerun()
