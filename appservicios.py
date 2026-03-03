@@ -33,7 +33,11 @@ def obtener_config():
 
 def obtener_datos_tickets():
     try:
+        # Re-intento automático si la lectura viene vacía para evitar falsos negativos
         df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
+        if df.empty:
+            df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
+            
         df.columns = [str(c).strip().upper() for c in df.columns]
         if "ID_TICKET" in df.columns:
             df["ID_NUM"] = pd.to_numeric(df["ID_TICKET"], errors='coerce').fillna(0).astype(int)
@@ -42,15 +46,27 @@ def obtener_datos_tickets():
         df["ANIO"] = pd.to_numeric(df.get("ANIO", 0), errors='coerce').fillna(0).astype(int)
         df["MES"] = pd.to_numeric(df.get("MES", 0), errors='coerce').fillna(0).astype(int)
         return df.fillna("")
-    except: return pd.DataFrame()
+    except Exception as e:
+        st.error(f"⚠️ Error de conexión: {e}")
+        return pd.DataFrame()
 
-def registrar_auditoria(id_ticket, accion, consultor):
+# 🛡️ FUNCIÓN DE GUARDADO SEGURO (MODO CIEGO ANTIBORRADO)
+def guardar_seguro(df_nuevo, accion_msg):
     try:
-        try: df_logs = conn.read(spreadsheet=url, worksheet="Log_Auditoria", ttl=0)
-        except: df_logs = pd.DataFrame(columns=["ID_TICKET", "CONSULTOR", "FECHA_HORA", "ACCION"])
-        nuevo_log = pd.DataFrame([{"ID_TICKET": id_ticket, "CONSULTOR": consultor, "FECHA_HORA": datetime.now().strftime("%d/%m/%Y %H:%M:%S"), "ACCION": accion}])
-        conn.update(spreadsheet=url, worksheet="Log_Auditoria", data=pd.concat([df_logs, nuevo_log], ignore_index=True))
-    except: pass
+        # Antes de impactar, leemos la base real para comparar tamaños
+        base_en_nube = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
+        
+        # Si la base en la nube tiene datos y el nuevo DF tiene MENOS filas, bloqueamos.
+        # (Excepto que sea una modificación de estado que no debería alterar el conteo total)
+        if not base_en_nube.empty and len(df_nuevo) < len(base_en_nube):
+            st.error("🚨 BLOQUEO DE SEGURIDAD: Se detectó una posible pérdida de registros. La operación ha sido cancelada para proteger la base de datos.")
+            return False
+            
+        conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_nuevo)
+        return True
+    except Exception as e:
+        st.error(f"❌ Error crítico al guardar: {e}")
+        return False
 
 # ==========================================
 # 🔐 LOGIN (VALIDACIÓN BLINDADA)
@@ -74,7 +90,6 @@ if not st.session_state.autenticado:
 nombre_consultor = st.session_state.usuario_logueado
 df_actual = obtener_datos_tickets()
 df_config = obtener_config()
-# Extraemos info del usuario actual para validar el ROL
 user_info = df_config[df_config["CONSULTOR"] == nombre_consultor].iloc[0]
 
 # SIDEBAR: Filtros Maestros
@@ -84,13 +99,13 @@ with st.sidebar:
         st.session_state.autenticado = False; st.rerun()
     st.divider()
     st.header("🎯 Filtros Maestros")
-    f_cli = st.multiselect("Clientes:", sorted(df_actual["CLIENTES"].unique()))
-    f_con = st.multiselect("Consultores:", sorted(df_actual["CONSULTOR"].unique()))
-    f_mod = st.multiselect("Módulos:", sorted(df_actual["MODULO"].unique()))
-    f_ani = st.multiselect("Años:", sorted(df_actual["ANIO"].unique(), reverse=True))
+    f_cli = st.multiselect("Clientes:", sorted(df_actual["CLIENTES"].unique()) if not df_actual.empty else [])
+    f_con = st.multiselect("Consultores:", sorted(df_actual["CONSULTOR"].unique()) if not df_actual.empty else [])
+    f_mod = st.multiselect("Módulos:", sorted(df_actual["MODULO"].unique()) if not df_actual.empty else [])
+    f_ani = st.multiselect("Años:", sorted(df_actual["ANIO"].unique(), reverse=True) if not df_actual.empty else [])
     f_mes = st.multiselect("Meses:", options=list(mes_d.keys()), format_func=lambda x: mes_d[x])
 
-# Dataframe Filtrado Maestro (df_f) que afecta a todas las solapas
+# Dataframe Filtrado Maestro (df_f)
 df_f = df_actual.copy()
 if f_cli: df_f = df_f[df_f["CLIENTES"].isin(f_cli)]
 if f_con: df_f = df_f[df_f["CONSULTOR"].isin(f_con)]
@@ -100,7 +115,6 @@ if f_mes: df_f = df_f[df_f["MES"].isin(f_mes)]
 
 # NAVEGACIÓN DINÁMICA POR ROL
 btns = ["➕ NUEVO", "✏️ MODIFICAR", "🔍 CONSULTAR", "📊 REPORTES", "📈 DASHBOARDS"]
-# RESTRICCIÓN SOLICITADA: Solo ADMIN ve Permisos
 es_admin = str(user_info.get("ROL")).upper() == "ADMIN"
 if es_admin:
     btns.append("⚙️ PERMISOS")
@@ -111,7 +125,7 @@ for i, b in enumerate(btns):
 st.divider()
 
 # ==========================================
-# SECCIÓN 1: NUEVO
+# SECCIÓN 1: NUEVO (CON GUARDADO SEGURO)
 # ==========================================
 if st.session_state.menu_activo == "➕ NUEVO":
     proximo_id = int(df_actual["ID_NUM"].max()) + 1 if not df_actual.empty else 1
@@ -134,12 +148,16 @@ if st.session_state.menu_activo == "➕ NUEVO":
         con_txt = st.text_area("Consulta *"); rta_txt = st.text_area("Respuesta *")
         if st.form_submit_button("💾 GUARDAR"):
             if usu_n and con_txt and rta_txt and tie_n > 0:
+                base_completa = obtener_datos_tickets().drop(columns=["ID_NUM"], errors="ignore")
                 nuevo = pd.DataFrame([{"ID_TICKET": proximo_id, "CONSULTOR": nombre_consultor, "TIPO_CONS": tipo_n, "PRIORIDAD": prio_n, "ESTADO": est_n, "ATENCION": ate_n, "CLIENTES": cli_n, "USUARIO": usu_n, "FE_CONSULT": fe_n.strftime('%d/%m/%Y'), "MODULO": mod_n, "CONSULTAS": con_txt, "RESPUESTAS": rta_txt, "TIEMPO_RES": tie_n, "ONLINE": on_n, "ANIO": fe_n.year, "MES": fe_n.month, "ULTIMA_MODIF": datetime.now().strftime("%d/%m/%Y %H:%M:%S")}])
-                conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=pd.concat([obtener_datos_tickets().drop(columns=["ID_NUM"], errors="ignore"), nuevo], ignore_index=True))
-                registrar_auditoria(proximo_id, "ALTA", nombre_consultor); st.balloons(); st.rerun()
+                
+                df_final = pd.concat([base_completa, nuevo], ignore_index=True)
+                if guardar_seguro(df_final, f"ALTA TICKET {proximo_id}"):
+                    registrar_auditoria(proximo_id, "ALTA", nombre_consultor)
+                    st.balloons(); st.rerun()
 
 # ==========================================
-# SECCIÓN 2: MODIFICAR (SOLO ABIERTOS/PROCESO + FILTROS)
+# SECCIÓN 2: MODIFICAR (CON GUARDADO SEGURO)
 # ==========================================
 elif st.session_state.menu_activo == "✏️ MODIFICAR":
     df_mod_list = df_f[df_f["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
@@ -156,12 +174,16 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                 df_actual.at[idx_f, "ESTADO"] = n_est; df_actual.at[idx_f, "TIEMPO_RES"] = n_tie
                 df_actual.at[idx_f, "CONSULTAS"] = n_con; df_actual.at[idx_f, "RESPUESTAS"] = n_rta
                 df_actual.at[idx_f, "ULTIMA_MODIF"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_actual.drop(columns=["ID_NUM"], errors="ignore"))
-                registrar_auditoria(id_m, "MODIFICACION", nombre_consultor); st.success("Listo."); st.rerun()
+                
+                # Preparamos el DF para guardar (quitando ID_NUM auxiliar)
+                df_envio = df_actual.drop(columns=["ID_NUM"], errors="ignore")
+                if guardar_seguro(df_envio, f"MODIFICACION TICKET {id_m}"):
+                    registrar_auditoria(id_m, "MODIFICACION", nombre_consultor)
+                    st.success("Ticket actualizado correctamente."); st.rerun()
     else: st.info("No hay tickets pendientes bajo los filtros actuales.")
 
 # ==========================================
-# SECCIÓN 3: CONSULTAR (PDF TÉCNICO COMPLETO)
+# SECCIÓN 3: CONSULTAR (FICHA TÉCNICA PDF)
 # ==========================================
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
     if not df_f.empty:
@@ -178,7 +200,7 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
             st.download_button("📥 PDF Ficha", pdf.output(dest='S').encode('latin-1'), f"Ticket_{id_c}.pdf")
 
 # ==========================================
-# SECCIÓN 4: REPORTES (SUMATORIA PDF + EXCEL DINÁMICO)
+# SECCIÓN 4: REPORTES (SUMATORIA PDF + EXCEL)
 # ==========================================
 elif st.session_state.menu_activo == "📊 REPORTES":
     st.header("📊 Reportes de Gestión")
@@ -209,7 +231,7 @@ elif st.session_state.menu_activo == "📊 REPORTES":
             st.download_button("📥 PDF Analítico", pdf_a.output(dest='S').encode('latin-1'), "Reporte_GR.pdf")
 
 # ==========================================
-# SECCIÓN 5: DASHBOARDS (ABIERTOS PARA TODOS)
+# SECCIÓN 5: DASHBOARDS
 # ==========================================
 elif st.session_state.menu_activo == "📈 DASHBOARDS":
     st.header("📈 Centro Operativo")
@@ -226,7 +248,7 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
 # SECCIÓN 6: PERMISOS (SOLO ADMIN)
 # ==========================================
 elif st.session_state.menu_activo == "⚙️ PERMISOS" and es_admin:
-    st.header("⚙️ Gestión de Usuarios (Acceso Administrador)")
+    st.header("⚙️ Gestión de Usuarios")
     df_ed = st.data_editor(df_config, num_rows="dynamic", hide_index=True)
     if st.button("💾 Guardar Nueva Configuración"):
-        conn.update(spreadsheet=url, worksheet="Config_Consultores", data=df_ed); st.success("Cambios aplicados."); st.rerun()
+        conn.update(spreadsheet=url, worksheet="Config_Consultores", data=df_ed); st.success("Cambios aplicados correctamente."); st.rerun()
