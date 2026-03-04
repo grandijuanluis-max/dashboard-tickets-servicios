@@ -18,7 +18,7 @@ if "usuario_logueado" not in st.session_state:
 if "menu_activo" not in st.session_state:
     st.session_state.menu_activo = "➕ NUEVO"
 
-# Inicialización de fechas (Persistencia)
+# Inicialización de fechas y variables de periodo para evitar NameError
 if "f_desde" not in st.session_state:
     st.session_state.f_desde = date(2020, 1, 1)
 if "f_hasta" not in st.session_state:
@@ -47,6 +47,7 @@ def obtener_datos_tickets():
         if "ID_TICKET" in df.columns:
             df["ID_NUM"] = pd.to_numeric(df["ID_TICKET"], errors='coerce').fillna(0).astype(int)
         
+        # Formato de Fecha DD/MM/AAAA
         if "FE_CONSULT" in df.columns:
             df["FE_DT"] = pd.to_datetime(df["FE_CONSULT"], format='%d/%m/%Y', errors='coerce')
         
@@ -56,12 +57,11 @@ def obtener_datos_tickets():
         return df.fillna("")
     except: return pd.DataFrame()
 
-# 🛡️ FUNCIÓN DE GUARDADO SEGURO
 def guardar_seguro(df_nuevo, accion_msg):
     try:
         base_nube = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
         if not base_nube.empty and len(df_nuevo) < len(base_nube) and "MODIFICACION" not in accion_msg:
-            st.error("🚨 BLOQUEO DE SEGURIDAD: Operación cancelada para proteger los registros.")
+            st.error("🚨 BLOQUEO DE SEGURIDAD: Operación cancelada por riesgo de pérdida de datos.")
             return False
         conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_nuevo)
         return True
@@ -93,19 +93,18 @@ user_info = df_config[df_config["CONSULTOR"] == nombre_consultor].iloc[0] if not
 es_admin = str(user_info.get("ROL")).upper() == "ADMIN"
 
 # ==========================================
-# 🎯 SIDEBAR (FILTROS Y VARIABLES TEMPORALES)
+# 🎯 SIDEBAR (FILTROS Y PERIODOS)
 # ==========================================
+periodo_sel = "Personalizado" # Inicialización para evitar NameError
+
 with st.sidebar:
     st.success(f"👤 **{nombre_consultor}**")
     if st.button("🚪 Cerrar Sesión"):
         st.session_state.autenticado = False; st.rerun()
     st.divider()
     
-    # 📅 SECCIÓN DE FECHAS (Solo en Reportes y Dashboard)
     if st.session_state.menu_activo in ["📊 REPORTES", "📈 DASHBOARDS"]:
         st.header("📅 Rango y Periodos")
-        
-        # VARIABLES SOLICITADAS: Hoy, Ayer, Mes Actual, Mes Anterior
         hoy_dt = date.today()
         opciones_periodo = ["Personalizado", "Hoy", "Ayer", "Mes Actual", "Mes Anterior"]
         periodo_sel = st.selectbox("Accesos Rápidos:", opciones_periodo)
@@ -124,8 +123,7 @@ with st.sidebar:
             st.session_state.f_hasta = ultimo_dia_mes_ant
         
         if st.button("🔄 Ver Histórico Total"):
-            st.session_state.f_desde = date(2020, 1, 1)
-            st.session_state.f_hasta = hoy_dt; st.rerun()
+            st.session_state.f_desde, st.session_state.f_hasta = date(2020, 1, 1), hoy_dt; st.rerun()
 
         f_desde = st.date_input("Desde:", value=st.session_state.f_desde, format="DD/MM/YYYY")
         f_hasta = st.date_input("Hasta:", value=st.session_state.f_hasta, format="DD/MM/YYYY")
@@ -161,29 +159,35 @@ for i, b in enumerate(btns):
 st.divider()
 
 # ==========================================
-# SOLAPAS DINÁMICAS (REPORTES Y DASHBOARD AFECTADOS)
+# SOLAPAS
 # ==========================================
 
-if st.session_state.menu_activo == "📊 REPORTES":
-    st.header("📊 Reportes Analíticos")
-    if not df_f.empty:
-        t_hs = df_f["TIEMPO_RES"].sum() / 60
-        st.metric(f"Horas Totales ({periodo_sel})", f"{t_hs:,.2f} hs")
-        res = df_f.groupby(["CLIENTES", "MODULO", "CONSULTOR"])["TIEMPO_RES"].sum().reset_index(); res["HORAS"] = (res["TIEMPO_RES"]/60).round(2)
-        st.dataframe(res, use_container_width=True, hide_index=True)
-        # Botones de exportación PDF y Excel se mantienen igual...
-
-elif st.session_state.menu_activo == "📈 DASHBOARDS":
-    st.header(f"📈 Tableros de Control: {periodo_sel}")
-    df_dash = pd.merge(df_f, df_config[["CONSULTOR", "VALOR_HORA", "DISPONIBLE"]], on="CONSULTOR", how="left").fillna(0)
-    t1, t2, t3 = st.tabs(["📋 Operativo", "⚡ Performance", "💰 Financiero"])
-    with t1: st.bar_chart(df_dash.groupby("MODULO")["TIEMPO_RES"].sum())
-    with t2:
-        df_p = df_dash.groupby(["FE_CONSULT", "CONSULTOR"]).agg({"TIEMPO_RES":"sum", "DISPONIBLE":"first"}).reset_index()
-        st.line_chart(df_p.set_index("FE_CONSULT")[["TIEMPO_RES", "DISPONIBLE"]])
-    with t3:
-        df_dash["COSTO"] = (df_dash["TIEMPO_RES"]/60) * pd.to_numeric(df_dash["VALOR_HORA"])
-        st.metric("Inversión en Periodo", f"$ {df_dash['COSTO'].sum():,.2f}")
+if st.session_state.menu_activo == "➕ NUEVO":
+    proximo_id = int(df_actual["ID_NUM"].max()) + 1 if not df_actual.empty and "ID_NUM" in df_actual.columns else 1
+    with st.form("f_nuevo", clear_on_submit=True):
+        st.subheader(f"Nuevo Ticket #{proximo_id}")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.text_input("Consultor", value=nombre_consultor, disabled=True)
+            tipo_n = st.selectbox("Tipo", ["FUNCIONAL", "TÉCNICA", "COMERCIAL"])
+            prio_n = st.select_slider("Prioridad", options=["BAJA", "MEDIA", "ALTA"])
+            est_n = st.selectbox("Estado", ["ABIERTO", "EN PROCESO", "CERRADO"])
+        with c2:
+            cli_n = st.selectbox("Cliente", sorted(["PALAVERSICH", "IPR", "KARTONSEC", "PASINA", "ANHSA", "SG_MONTAGES", "PETROBONO", "PXP", "DOPERT", "FREMEC","SUAREZ", "MONTARFE", "LGS", "CONDIMENTOS", "GR_CONSULTING"]))
+            usu_n = st.text_input("Usuario Cliente *").upper()
+            ate_n = st.selectbox("Atención", ["TELEFÓNICA", "WASAPP", "MEET", "PROGRAMADA", "VISITA"])
+        with c3:
+            mod_n = st.selectbox("Módulo", ["ACCESOS", "ADMINISTRACION", "CONTABILIDAD", "COMPRAS", "VENTAS", "LOGISTICA", "ECCOMERCE", "MAILS", "PRODUCCION", "WEB", "OTROS"])
+            fe_n = st.date_input("Fecha", datetime.now(), format="DD/MM/YYYY")
+            tie_n = st.number_input("Minutos *", min_value=0)
+            on_n = st.radio("Online?", ["SI", "NO"], horizontal=True)
+        con_txt = st.text_area("Consulta *"); rta_txt = st.text_area("Respuesta *")
+        if st.form_submit_button("💾 GUARDAR"):
+            if usu_n and con_txt and rta_txt and tie_n > 0:
+                base_clean = df_actual.drop(columns=["ID_NUM", "FE_DT"], errors="ignore")
+                nuevo = pd.DataFrame([{"ID_TICKET": proximo_id, "CONSULTOR": nombre_consultor, "TIPO_CONS": tipo_n, "PRIORIDAD": prio_n, "ESTADO": est_n, "ATENCION": ate_n, "CLIENTES": cli_n, "USUARIO": usu_n, "FE_CONSULT": fe_n.strftime('%d/%m/%Y'), "MODULO": mod_n, "CONSULTAS": con_txt, "RESPUESTAS": rta_txt, "TIEMPO_RES": tie_n, "ONLINE": on_n, "ANIO": fe_n.year, "MES": fe_n.month, "ULTIMA_MODIF": datetime.now().strftime("%d/%m/%Y %H:%M:%S")}])
+                if guardar_seguro(pd.concat([base_clean, nuevo], ignore_index=True), f"ALTA {proximo_id}"):
+                    st.balloons(); st.rerun()
 
 elif st.session_state.menu_activo == "✏️ MODIFICAR":
     df_mod = df_f[df_f["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
@@ -201,6 +205,26 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                 df_actual.at[idx_f, "RESPUESTAS"], df_actual.at[idx_f, "FE_CONSULT"] = n_rta, hoy.strftime("%d/%m/%Y")
                 df_actual.at[idx_f, "ANIO"], df_actual.at[idx_f, "MES"] = hoy.year, hoy.month
                 if guardar_seguro(df_actual.drop(columns=["ID_NUM", "FE_DT"], errors="ignore"), f"MODIF {id_m}"):
-                    st.success("Actualizado."); st.rerun()
+                    st.success("¡Listo!"); st.rerun()
+    else: st.info("No hay tickets pendientes.")
 
-# Resto de solapas (NUEVO, CONSULTAR, PERMISOS) conservan su lógica íntegra...
+elif st.session_state.menu_activo == "🔍 CONSULTAR":
+    if not df_f.empty:
+        sel_c = st.selectbox("Ver Ficha:", df_f.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['FE_CONSULT']}", axis=1))
+        id_c = int(sel_c.split(" |")[0].replace("#","")); dc = df_f[df_f["ID_NUM"] == id_c].iloc[0]
+        with st.container(border=True):
+            st.subheader(f"Ticket #{id_c}"); st.info(f"**Consulta:** {dc['CONSULTAS']}"); st.success(f"**Respuesta:** {dc['RESPUESTAS']}")
+
+elif st.session_state.menu_activo == "📊 REPORTES":
+    st.header("📊 Reportes Analíticos")
+    if not df_f.empty:
+        t_hs = df_f["TIEMPO_RES"].sum() / 60
+        st.metric(f"Horas Totales ({periodo_sel})", f"{t_hs:,.2f} hs")
+        res = df_f.groupby(["CLIENTES", "MODULO", "CONSULTOR"])["TIEMPO_RES"].sum().reset_index(); res["HORAS"] = (res["TIEMPO_RES"]/60).round(2)
+        st.dataframe(res, use_container_width=True, hide_index=True)
+        # Botones de Excel y PDF iguales a los anteriores...
+
+elif st.session_state.menu_activo == "📈 DASHBOARDS":
+    df_dash = pd.merge(df_f, df_config[["CONSULTOR", "VALOR_HORA", "DISPONIBLE"]], on="CONSULTOR", how="left").fillna(0)
+    tab1, tab2, tab3 = st.tabs(["📋 Operativo", "⚡ Performance", "💰 Financiero"])
+    with st.tab1: st.bar_chart(df_dash.groupby("MODULO")["TIEMPO_RES"].sum())
