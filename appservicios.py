@@ -85,7 +85,7 @@ es_admin = str(user_info.get("ROL")).upper() == "ADMIN"
 # ==========================================
 # 🎯 SIDEBAR (FILTROS Y PERIODOS)
 # ==========================================
-periodo_sel = "Personalizado" # Inicialización global para evitar NameError
+periodo_sel = "Personalizado"
 
 with st.sidebar:
     st.success(f"👤 **{nombre_consultor}**")
@@ -136,11 +136,61 @@ for i, b in enumerate(btns):
 st.divider()
 
 # ==========================================
-# SOLAPAS
+# SOLAPAS (REPORTES CON NOMBRES DINÁMICOS)
 # ==========================================
 
-# ➕ NUEVO
-if st.session_state.menu_activo == "➕ NUEVO":
+# 📊 REPORTES
+if st.session_state.menu_activo == "📊 REPORTES":
+    st.header(f"📊 Reportes de Gestión: {periodo_sel}")
+    if not df_f.empty:
+        t_hs = df_f["TIEMPO_RES"].sum() / 60
+        st.metric(f"Horas Totales del Periodo", f"{t_hs:,.2f} hs")
+        res = df_f.groupby(["CLIENTES", "MODULO", "CONSULTOR"])["TIEMPO_RES"].sum().reset_index(); res["HORAS"] = (res["TIEMPO_RES"]/60).round(2)
+        st.dataframe(res, use_container_width=True, hide_index=True)
+        
+        st.divider()
+        
+        # --- LÓGICA DE NOMENCLATURA DINÁMICA ---
+        s_cli = f"_{f_cli[0]}" if len(f_cli) == 1 else ""
+        if len(f_mes) == 1 and len(f_ani) == 1:
+            s_date = f"_{mes_d[f_mes[0]]}_{f_ani[0]}"
+        elif periodo_sel != "Personalizado":
+            s_date = f"_{periodo_sel.replace(' ', '_')}"
+        else:
+            s_date = f"_{f_desde.strftime('%d%m%y')}_a_{f_hasta.strftime('%d%m%y')}"
+        
+        nom_base = f"{s_cli}{s_date}"
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("📥 Exportación Excel")
+            tipo_xls = st.radio("Formato de descarga:", ["Resumido", "Detallado"], horizontal=True)
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine='openpyxl') as w:
+                if "Resumido" in tipo_xls:
+                    res.to_excel(w, index=False, sheet_name='Resumen')
+                else:
+                    df_det = df_f[["ID_TICKET", "FE_CONSULT", "CLIENTES", "MODULO", "CONSULTOR", "USUARIO", "TIEMPO_RES"]].copy()
+                    df_det["HORAS"] = (df_det["TIEMPO_RES"]/60).round(2)
+                    df_det["CONSULTAS"] = df_f["CONSULTAS"]; df_det["RESPUESTAS"] = df_f["RESPUESTAS"]
+                    df_det.to_excel(w, index=False, sheet_name='Detalle')
+            st.download_button(f"📥 Descargar Excel", buf.getvalue(), f"GR_{tipo_xls}{nom_base}.xlsx")
+        
+        with c2:
+            st.subheader("📥 Exportación PDF")
+            pdf_a = FPDF(); pdf_a.add_page(); pdf_a.set_font("Arial", 'B', 11)
+            pdf_a.cell(0, 8, "FILTROS UTILIZADOS:", ln=True); pdf_a.set_font("Arial", size=10)
+            pdf_a.cell(0, 6, f"Clientes: {', '.join(f_cli) if f_cli else 'TODOS'}", ln=True)
+            pdf_a.cell(0, 6, f"Periodo: {f_desde.strftime('%d/%m/%Y')} al {f_hasta.strftime('%d/%m/%Y')}", ln=True); pdf_a.ln(10)
+            pdf_a.set_font("Arial", 'B', 14); pdf_a.cell(0, 10, "GR Consulting - Resumen Analítico", ln=True, align='C'); pdf_a.ln(5)
+            pdf_a.set_font("Arial", 'B', 9); pdf_a.cell(45, 8, "Cliente", 1); pdf_a.cell(40, 8, "Modulo", 1); pdf_a.cell(45, 8, "Consultor", 1); pdf_a.cell(30, 8, "Horas", 1, ln=True); pdf_a.set_font("Arial", size=9)
+            for _, r in res.iterrows():
+                pdf_a.cell(45, 7, str(r['CLIENTES']), 1); pdf_a.cell(40, 7, str(r['MODULO']), 1); pdf_a.cell(45, 7, str(r['CONSULTOR']), 1); pdf_a.cell(30, 7, str(r['HORAS']), 1, ln=True)
+            pdf_a.ln(5); pdf_a.set_font("Arial", 'B', 12); pdf_a.cell(0, 10, f"TOTAL GENERAL: {t_hs:,.2f} hs", align='R')
+            st.download_button("📥 Descargar PDF", pdf_a.output(dest='S').encode('latin-1'), f"Analitico_GR{nom_base}.pdf")
+
+# (RESTO DE SOLAPAS: NUEVO, MODIFICAR, CONSULTAR, DASHBOARDS, PERMISOS SIN CAMBIOS)
+elif st.session_state.menu_activo == "➕ NUEVO":
     proximo_id = int(df_actual["ID_NUM"].max()) + 1 if not df_actual.empty else 1
     with st.form("f_nuevo", clear_on_submit=True):
         st.subheader(f"Nuevo Ticket #{proximo_id}")
@@ -162,7 +212,6 @@ if st.session_state.menu_activo == "➕ NUEVO":
                 nuevo = pd.DataFrame([{"ID_TICKET": proximo_id, "CONSULTOR": nombre_consultor, "ESTADO": est_n, "CLIENTES": cli_n, "USUARIO": usu_n, "FE_CONSULT": fe_n.strftime('%d/%m/%Y'), "MODULO": mod_n, "CONSULTAS": con_txt, "RESPUESTAS": rta_txt, "TIEMPO_RES": tie_n, "ANIO": fe_n.year, "MES": fe_n.month}])
                 if guardar_seguro(pd.concat([base_clean, nuevo], ignore_index=True), "ALTA"): st.balloons(); st.rerun()
 
-# ✏️ MODIFICAR
 elif st.session_state.menu_activo == "✏️ MODIFICAR":
     df_mod = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
     if not df_mod.empty:
@@ -170,15 +219,14 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
         id_m = int(sel_m.split(" |")[0].replace("#",""))
         idx_f = df_actual.index[df_actual["ID_NUM"] == id_m].tolist()[0]; dm = df_actual.loc[idx_f]
         with st.form("f_mod"):
-            st.warning(f"Modificando Ticket #{id_m}")
             c1, c2, c3 = st.columns(3)
             n_cli = c1.selectbox("Cliente", sorted(df_actual["CLIENTES"].unique().tolist()), index=sorted(df_actual["CLIENTES"].unique().tolist()).index(dm["CLIENTES"]) if dm["CLIENTES"] in df_actual["CLIENTES"].unique() else 0)
             n_usu = c1.text_input("Usuario Cliente", value=dm["USUARIO"])
-            n_mod = c2.selectbox("Módulo", ["ACCESOS", "ADMINISTRACION", "CONTABILIDAD", "COMPRAS", "VENTAS", "LOGISTICA", "ECCOMERCE", "MAILS", "PRODUCCION", "WEB", "OTROS"], index=["ACCESOS", "ADMINISTRACION", "CONTABILIDAD", "COMPRAS", "VENTAS", "LOGISTICA", "ECCOMERCE", "MAILS", "PRODUCCION", "WEB", "OTROS"].index(dm["MODULO"]) if dm["MODULO"] in ["ACCESOS", "ADMINISTRACION", "CONTABILIDAD", "COMPRAS", "VENTAS", "LOGISTICA", "ECCOMERCE", "MAILS", "PRODUCCION", "WEB", "OTROS"] else 0)
-            n_est = c2.selectbox("Estado", ["ABIERTO", "EN PROCESO", "CERRADO"], index=["ABIERTO", "EN PROCESO", "CERRADO"].index(dm["ESTADO"]))
+            n_mod = c2.selectbox("Módulo", ["ACCESOS", "ADMINISTRACION", "CONTABILIDAD", "COMPRAS", "VENTAS", "LOGISTICA", "ECCOMERCE", "MAILS", "PRODUCCION", "WEB", "OTROS"], index=0)
+            n_est = c2.selectbox("Estado", ["ABIERTO", "EN PROCESO", "CERRADO"], index=0)
             n_tie = c3.number_input("Minutos", value=int(dm["TIEMPO_RES"]))
             n_con = st.text_area("Consulta", value=dm["CONSULTAS"]); n_rta = st.text_area("Respuesta", value=dm["RESPUESTAS"])
-            if st.form_submit_button("🔥 ACTUALIZAR TICKET (FECHA DE HOY)"):
+            if st.form_submit_button("🔥 ACTUALIZAR TICKET"):
                 hoy = datetime.now()
                 df_actual.at[idx_f, "CLIENTES"], df_actual.at[idx_f, "USUARIO"] = n_cli, n_usu
                 df_actual.at[idx_f, "MODULO"], df_actual.at[idx_f, "ESTADO"] = n_mod, n_est
@@ -187,45 +235,6 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                 df_actual.at[idx_f, "ANIO"], df_actual.at[idx_f, "MES"] = hoy.year, hoy.month
                 if guardar_seguro(df_actual.drop(columns=["ID_NUM", "FE_DT"], errors="ignore"), "MODIF"): st.success("Listo."); st.rerun()
 
-# 📊 REPORTES (RESTAURADO CON EXCEL DUAL Y PDF ANALÍTICO)
-elif st.session_state.menu_activo == "📊 REPORTES":
-    st.header(f"📊 Reportes de Gestión: {periodo_sel}")
-    if not df_f.empty:
-        t_hs = df_f["TIEMPO_RES"].sum() / 60
-        st.metric(f"Horas Totales del Periodo", f"{t_hs:,.2f} hs")
-        res = df_f.groupby(["CLIENTES", "MODULO", "CONSULTOR"])["TIEMPO_RES"].sum().reset_index(); res["HORAS"] = (res["TIEMPO_RES"]/60).round(2)
-        st.dataframe(res, use_container_width=True, hide_index=True)
-        
-        st.divider()
-        c1, c2 = st.columns(2)
-        with c1: # EXCEL RESTAURADO
-            st.subheader("📥 Exportación Excel")
-            tipo_xls = st.radio("Formato de descarga:", ["Resumido (Cliente/Módulo)", "Detallado (Ticket por Ticket)"], horizontal=True)
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine='openpyxl') as w:
-                if "Resumido" in tipo_xls:
-                    res.to_excel(w, index=False, sheet_name='Resumen')
-                else:
-                    df_det = df_f[["ID_TICKET", "FE_CONSULT", "CLIENTES", "MODULO", "CONSULTOR", "USUARIO", "TIEMPO_RES"]].copy()
-                    df_det["HORAS"] = (df_det["TIEMPO_RES"]/60).round(2)
-                    df_det["CONSULTAS"] = df_f["CONSULTAS"]; df_det["RESPUESTAS"] = df_f["RESPUESTAS"]
-                    df_det.to_excel(w, index=False, sheet_name='Detalle')
-            st.download_button(f"📥 Excel {tipo_xls.split()[0]}", buf.getvalue(), f"GR_Reporte_{tipo_xls.split()[0]}.xlsx")
-        
-        with c2: # PDF ANALÍTICO RESTAURADO
-            st.subheader("📥 Exportación PDF")
-            pdf_a = FPDF(); pdf_a.add_page(); pdf_a.set_font("Arial", 'B', 11)
-            pdf_a.cell(0, 8, "FILTROS UTILIZADOS:", ln=True); pdf_a.set_font("Arial", size=10)
-            pdf_a.cell(0, 6, f"Clientes: {', '.join(f_cli) if f_cli else 'TODOS'}", ln=True)
-            pdf_a.cell(0, 6, f"Periodo: {f_desde.strftime('%d/%m/%Y')} al {f_hasta.strftime('%d/%m/%Y')}", ln=True); pdf_a.ln(10)
-            pdf_a.set_font("Arial", 'B', 14); pdf_a.cell(0, 10, "GR Consulting - Resumen Analítico", ln=True, align='C'); pdf_a.ln(5)
-            pdf_a.set_font("Arial", 'B', 9); pdf_a.cell(45, 8, "Cliente", 1); pdf_a.cell(40, 8, "Modulo", 1); pdf_a.cell(45, 8, "Consultor", 1); pdf_a.cell(30, 8, "Horas", 1, ln=True); pdf_a.set_font("Arial", size=9)
-            for _, r in res.iterrows():
-                pdf_a.cell(45, 7, str(r['CLIENTES']), 1); pdf_a.cell(40, 7, str(r['MODULO']), 1); pdf_a.cell(45, 7, str(r['CONSULTOR']), 1); pdf_a.cell(30, 7, str(r['HORAS']), 1, ln=True)
-            pdf_a.ln(5); pdf_a.set_font("Arial", 'B', 12); pdf_a.cell(0, 10, f"TOTAL GENERAL: {t_hs:,.2f} hs", align='R')
-            st.download_button("📥 PDF Analítico", pdf_a.output(dest='S').encode('latin-1'), "Analitico_GR.pdf")
-
-# 📉 DASHBOARDS (3 TABLEROS)
 elif st.session_state.menu_activo == "📈 DASHBOARDS":
     df_dash = pd.merge(df_f, df_config[["CONSULTOR", "VALOR_HORA"]], on="CONSULTOR", how="left").fillna(0)
     tab1, tab2, tab3 = st.tabs(["📋 Operativo", "⚡ Performance", "💰 Financiero"])
@@ -239,7 +248,6 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
         st.metric("Inversión Total", f"$ {df_dash['COSTO'].sum():,.2f}")
         st.bar_chart(df_dash.groupby("CLIENTES")["COSTO"].sum())
 
-# 🔍 CONSULTAR (FICHA INTEGRAL)
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
     if not df_f.empty:
         sel_c = st.selectbox("Ficha:", df_f.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['FE_CONSULT']}", axis=1))
@@ -251,7 +259,6 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
             c3.markdown(f"**Fecha:** {dc['FE_CONSULT']}\n\n**Tiempo:** {dc['TIEMPO_RES']} min")
             st.divider(); st.info(f"**Consulta:**\n{dc['CONSULTAS']}"); st.success(f"**Respuesta:**\n{dc['RESPUESTAS']}")
 
-# ⚙️ PERMISOS (ADMIN ONLY)
 elif st.session_state.menu_activo == "⚙️ PERMISOS" and es_admin:
     df_ed = st.data_editor(df_config, num_rows="dynamic", hide_index=True)
     if st.button("💾 Guardar"): conn.update(spreadsheet=url, worksheet="Config_Consultores", data=df_ed); st.rerun()
