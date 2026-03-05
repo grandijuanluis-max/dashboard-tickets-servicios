@@ -36,24 +36,31 @@ def obtener_datos_tickets():
         df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
         if df is None or df.empty: df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
         if df is None or df.empty: return pd.DataFrame()
-        
         df.columns = [str(c).strip().upper().replace('AÑO', 'ANIO') for c in df.columns]
         if "ID_TICKET" in df.columns:
             df["ID_NUM"] = pd.to_numeric(df["ID_TICKET"], errors='coerce').fillna(0).astype(int)
         if "FE_CONSULT" in df.columns:
             df["FE_DT"] = pd.to_datetime(df["FE_CONSULT"], format='%d/%m/%Y', errors='coerce')
-        
         df["TIEMPO_RES"] = pd.to_numeric(df.get("TIEMPO_RES", 0), errors='coerce').fillna(0)
         df["ANIO"] = pd.to_numeric(df.get("ANIO", 0), errors='coerce').fillna(0).astype(int)
         df["MES"] = pd.to_numeric(df.get("MES", 0), errors='coerce').fillna(0).astype(int)
         return df.fillna("")
     except: return pd.DataFrame()
 
+# 🛡️ FUNCIÓN DE AUDITORÍA (RESTAURADA)
+def registrar_auditoria(id_ticket, accion, consultor):
+    try:
+        try: df_logs = conn.read(spreadsheet=url, worksheet="Log_Auditoria", ttl=0)
+        except: df_logs = pd.DataFrame(columns=["ID_TICKET", "CONSULTOR", "FECHA_HORA", "ACCION"])
+        nuevo_log = pd.DataFrame([{"ID_TICKET": id_ticket, "CONSULTOR": consultor, "FECHA_HORA": datetime.now().strftime("%d/%m/%Y %H:%M:%S"), "ACCION": accion}])
+        conn.update(spreadsheet=url, worksheet="Log_Auditoria", data=pd.concat([df_logs, nuevo_log], ignore_index=True))
+    except: pass
+
 def guardar_seguro(df_nuevo, accion_msg):
     try:
         base_nube = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
         if base_nube is not None and not base_nube.empty and len(df_nuevo) < len(base_nube) and "MODIF" not in accion_msg:
-            st.error("🚨 BLOQUEO DE SEGURIDAD: Operación cancelada por riesgo de pérdida de datos.")
+            st.error("🚨 BLOQUEO DE SEGURIDAD: Pérdida de registros detectada.")
             return False
         conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=df_nuevo)
         return True
@@ -134,7 +141,7 @@ for i, b in enumerate(btns):
 st.divider()
 
 # ==========================================
-# ➕ SOLAPA 1: NUEVO (13 CAMPOS)
+# ➕ SOLAPA 1: NUEVO (13 CAMPOS + AUDITORIA)
 # ==========================================
 if st.session_state.menu_activo == "➕ NUEVO":
     proximo_id = int(df_actual["ID_NUM"].max()) + 1 if not df_actual.empty else 1
@@ -155,9 +162,7 @@ if st.session_state.menu_activo == "➕ NUEVO":
             mod_n = st.selectbox("MODULO", ["ACCESOS", "ADMINISTRACION", "CONTABILIDAD", "COMPRAS", "VENTAS", "LOGISTICA", "ECCOMERCE", "MAILS", "PRODUCCION", "WEB", "OTROS"])
             fe_n = st.date_input("FE_CONSULT", datetime.now(), format="DD/MM/YYYY")
             tie_n = st.number_input("TIEMPO_RES (min) *", min_value=0)
-        
-        con_txt = st.text_area("CONSULTAS *")
-        rta_txt = st.text_area("RESPUESTAS *")
+        con_txt = st.text_area("CONSULTAS *"); rta_txt = st.text_area("RESPUESTAS *")
         
         if st.form_submit_button("💾 GUARDAR"):
             faltantes = []
@@ -167,15 +172,17 @@ if st.session_state.menu_activo == "➕ NUEVO":
             if tie_n <= 0: faltantes.append("TIEMPO")
             
             estado_final = "ABIERTO" if faltantes else est_n
-            if faltantes: st.warning(f"⚠️ Guardado como ABIERTO. Faltan: {', '.join(faltantes)}")
+            if faltantes: st.warning(f"⚠️ Guardado como ABIERTO por falta de: {', '.join(faltantes)}")
             
             base_clean = df_actual.drop(columns=["ID_NUM", "FE_DT"], errors="ignore")
             nuevo = pd.DataFrame([{"ID_TICKET": proximo_id, "CONSULTOR": nombre_consultor, "TIPO_CONS": tipo_n, "PRIORIDAD": prio_n, "ESTADO": estado_final, "ATENCION": ate_n, "CLIENTES": cli_n, "USUARIO": usu_n, "FE_CONSULT": fe_n.strftime('%d/%m/%Y'), "MODULO": mod_n, "CONSULTAS": con_txt, "RESPUESTAS": rta_txt, "TIEMPO_RES": tie_n, "ONLINE": on_n, "ANIO": fe_n.year, "MES": fe_n.month}])
+            
             if guardar_seguro(pd.concat([base_clean, nuevo], ignore_index=True), "ALTA"):
+                registrar_auditoria(proximo_id, f"ALTA ({estado_final})", nombre_consultor)
                 st.success(f"Ticket #{proximo_id} registrado."); st.rerun()
 
 # ==========================================
-# ✏️ SOLAPA 2: MODIFICAR (13 CAMPOS)
+# ✏️ SOLAPA 2: MODIFICAR (AUDITORIA INCLUIDA)
 # ==========================================
 elif st.session_state.menu_activo == "✏️ MODIFICAR":
     df_mod = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
@@ -185,10 +192,10 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
         idx_f = df_actual.index[df_actual["ID_NUM"] == id_m].tolist()[0]; dm = df_actual.loc[idx_f]
         
         with st.form("f_mod"):
-            st.info(f"Modificando Registro #{id_m}")
+            st.info(f"Modificando Ticket #{id_m}")
             c1, c2, c3 = st.columns(3)
             with c1:
-                n_consu = st.text_input("CONSULTOR", value=dm["CONSULTOR"], disabled=True)
+                st.text_input("CONSULTOR", value=dm["CONSULTOR"], disabled=True)
                 n_tipo = st.selectbox("TIPO_CONS", ["FUNCIONAL", "TÉCNICA", "COMERCIAL"], index=0)
                 n_prio = st.selectbox("PRIORIDAD", ["BAJA", "MEDIA", "ALTA"], index=0)
                 n_est = st.selectbox("ESTADO", ["ABIERTO", "EN PROCESO", "CERRADO"], index=["ABIERTO", "EN PROCESO", "CERRADO"].index(dm["ESTADO"]))
@@ -202,8 +209,7 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                 n_fe = st.date_input("FE_CONSULT", datetime.strptime(dm["FE_CONSULT"], '%d/%m/%Y'), format="DD/MM/YYYY")
                 n_tie = st.number_input("TIEMPO_RES", value=int(dm["TIEMPO_RES"]))
             
-            n_con = st.text_area("CONSULTAS", value=dm["CONSULTAS"])
-            n_rta = st.text_area("RESPUESTAS", value=dm["RESPUESTAS"])
+            n_con = st.text_area("CONSULTAS", value=dm["CONSULTAS"]); n_rta = st.text_area("RESPUESTAS", value=dm["RESPUESTAS"])
             
             if st.form_submit_button("🔥 ACTUALIZAR REGISTRO"):
                 df_actual.at[idx_f, "TIPO_CONS"], df_actual.at[idx_f, "PRIORIDAD"] = n_tipo, n_prio
@@ -214,39 +220,12 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                 df_actual.at[idx_f, "TIEMPO_RES"], df_actual.at[idx_f, "CONSULTAS"] = n_tie, n_con
                 df_actual.at[idx_f, "RESPUESTAS"] = n_rta
                 df_actual.at[idx_f, "ANIO"], df_actual.at[idx_f, "MES"] = n_fe.year, n_fe.month
-                if guardar_seguro(df_actual.drop(columns=["ID_NUM", "FE_DT"], errors="ignore"), "MODIF"): 
+                
+                if guardar_seguro(df_actual.drop(columns=["ID_NUM", "FE_DT"], errors="ignore"), "MODIF"):
+                    registrar_auditoria(id_m, f"MODIFICACION ({n_est})", nombre_consultor)
                     st.success("Actualizado."); st.rerun()
 
-# ==========================================
-# 🔍 SOLAPA 3: CONSULTAR (13 CAMPOS)
-# ==========================================
-elif st.session_state.menu_activo == "🔍 CONSULTAR":
-    if not df_f.empty:
-        sel_c = st.selectbox("Ficha:", df_f.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['ESTADO']}", axis=1))
-        id_c = int(sel_c.split(" |")[0].replace("#","")); dc = df_f[df_f["ID_NUM"] == id_c].iloc[0]
-        with st.container(border=True):
-            st.subheader(f"Ficha Completa Ticket #{id_c}")
-            v1, v2, v3 = st.columns(3)
-            with v1:
-                st.markdown(f"**CONSULTOR:** {dc['CONSULTOR']}")
-                st.markdown(f"**TIPO:** {dc['TIPO_CONS']}")
-                st.markdown(f"**PRIORIDAD:** {dc['PRIORIDAD']}")
-                st.markdown(f"**ESTADO:** {dc['ESTADO']}")
-            with v2:
-                st.markdown(f"**CLIENTE:** {dc['CLIENTES']}")
-                st.markdown(f"**USUARIO:** {dc['USUARIO']}")
-                st.markdown(f"**ATENCIÓN:** {dc['ATENCION']}")
-                st.markdown(f"**ONLINE:** {dc['ONLINE']}")
-            with v3:
-                st.markdown(f"**FECHA:** {dc['FE_CONSULT']}")
-                st.markdown(f"**MÓDULO:** {dc['MODULO']}")
-                st.markdown(f"**TIEMPO:** {dc['TIEMPO_RES']} min")
-                st.markdown(f"**PERIODO:** {dc['MES']}/{dc['ANIO']}")
-            st.divider()
-            st.info(f"**CONSULTA:**\n{dc['CONSULTAS']}")
-            st.success(f"**RESPUESTA:**\n{dc['RESPUESTAS']}")
-
-# (DASHBOARDS, REPORTES y PERMISOS siguen funcionando con la lógica anterior de hoy)
+# (REPORTES, DASHBOARDS, CONSULTAR y PERMISOS se mantienen iguales a la versión anterior)
 elif st.session_state.menu_activo == "📊 REPORTES":
     st.header(f"📊 Reportes: {periodo_sel}")
     if not df_f.empty:
@@ -254,7 +233,7 @@ elif st.session_state.menu_activo == "📊 REPORTES":
         st.metric("Horas Totales", f"{t_hs:,.2f} hs")
         res = df_f.groupby(["CLIENTES", "MODULO", "CONSULTOR"])["TIEMPO_RES"].sum().reset_index(); res["HORAS"] = (res["TIEMPO_RES"]/60).round(2)
         st.dataframe(res, use_container_width=True, hide_index=True)
-        
+        # Nombres de archivos dinámicos (restaurados)
         s_cli = f"_{f_cli[0]}" if len(f_cli) == 1 else ""
         s_date = f"_{mes_d[f_mes[0]]}_{f_ani[0]}" if (len(f_mes)==1 and len(f_ani)==1) else f"_{f_desde.strftime('%d%m%y')}_a_{f_hasta.strftime('%d%m%y')}"
         nom_base = f"{s_cli}{s_date}"
@@ -266,13 +245,12 @@ elif st.session_state.menu_activo == "📊 REPORTES":
                 if "Resumido" in tipo_xls: res.to_excel(w, index=False)
                 else:
                     df_det = df_f[["ID_TICKET", "FE_CONSULT", "CLIENTES", "MODULO", "CONSULTOR", "USUARIO", "TIEMPO_RES"]].copy()
-                    df_det["HORAS"] = (df_det["TIEMPO_RES"]/60).round(2)
-                    df_det["CONSULTAS"] = df_f["CONSULTAS"]; df_det["RESPUESTAS"] = df_f["RESPUESTAS"]
+                    df_det["HORAS"] = (df_det["TIEMPO_RES"]/60).round(2); df_det["CONSULTAS"] = df_f["CONSULTAS"]; df_det["RESPUESTAS"] = df_f["RESPUESTAS"]
                     df_det.to_excel(w, index=False)
             st.download_button(f"📥 Excel", buf.getvalue(), f"GR_{tipo_xls}{nom_base}.xlsx")
         with c2:
             pdf_a = FPDF(); pdf_a.add_page(); pdf_a.set_font("Arial", 'B', 11)
-            pdf_a.cell(0, 8, f"FILTROS: " + (f_cli[0] if len(f_cli)==1 else "VARIOS"), ln=True)
+            pdf_a.cell(0, 8, "FILTROS: " + (f_cli[0] if len(f_cli)==1 else "VARIOS"), ln=True)
             pdf_a.set_font("Arial", 'B', 14); pdf_a.cell(0, 10, "Resumen Analítico", ln=True, align='C')
             for _, r in res.iterrows(): pdf_a.cell(45, 7, str(r['CLIENTES']), 1); pdf_a.cell(40, 7, str(r['MODULO']), 1); pdf_a.cell(30, 7, str(r['HORAS']), 1, ln=True)
             st.download_button("📥 PDF", pdf_a.output(dest='S').encode('latin-1'), f"Analitico_GR{nom_base}.pdf")
@@ -288,6 +266,18 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
     with tab3:
         df_dash["COSTO"] = (df_dash["TIEMPO_RES"]/60) * pd.to_numeric(df_dash["VALOR_HORA"])
         st.metric("Inversión Total", f"$ {df_dash['COSTO'].sum():,.2f}")
+
+elif st.session_state.menu_activo == "🔍 CONSULTAR":
+    if not df_f.empty:
+        sel_c = st.selectbox("Ficha:", df_f.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['ESTADO']}", axis=1))
+        id_c = int(sel_c.split(" |")[0].replace("#","")); dc = df_f[df_f["ID_NUM"] == id_c].iloc[0]
+        with st.container(border=True):
+            st.subheader(f"Ticket #{id_c} [{dc['ESTADO']}]")
+            v1, v2, v3 = st.columns(3)
+            with v1: st.markdown(f"**CONSULTOR:** {dc['CONSULTOR']}\n\n**TIPO:** {dc['TIPO_CONS']}\n\n**PRIORIDAD:** {dc['PRIORIDAD']}")
+            with v2: st.markdown(f"**CLIENTE:** {dc['CLIENTES']}\n\n**USUARIO:** {dc['USUARIO']}\n\n**ATENCIÓN:** {dc['ATENCION']}")
+            with v3: st.markdown(f"**FECHA:** {dc['FE_CONSULT']}\n\n**TIEMPO:** {dc['TIEMPO_RES']} min\n\n**ONLINE:** {dc['ONLINE']}")
+            st.divider(); st.info(f"**Consulta:**\n{dc['CONSULTAS']}"); st.success(f"**Respuesta:**\n{dc['RESPUESTAS']}")
 
 elif st.session_state.menu_activo == "⚙️ PERMISOS" and es_admin:
     df_ed = st.data_editor(df_config, num_rows="dynamic", hide_index=True)
