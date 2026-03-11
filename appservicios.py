@@ -37,12 +37,14 @@ def obtener_datos_tickets():
         df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
         if df is None or df.empty: return pd.DataFrame()
         
+        # Limpieza de nombres de columnas
         df.columns = [str(c).strip().upper().replace('AÑO', 'ANIO') for c in df.columns]
         
         if "ID_TICKET" in df.columns:
             df["ID_NUM"] = pd.to_numeric(df["ID_TICKET"], errors='coerce').fillna(0).astype(int)
         
         if "FE_CONSULT" in df.columns:
+            # Conversión flexible: intenta día primero, si falla usa el estándar de pandas
             df["FE_DT"] = pd.to_datetime(df["FE_CONSULT"], dayfirst=True, errors='coerce')
             
         df["TIEMPO_RES"] = pd.to_numeric(df.get("TIEMPO_RES", 0), errors='coerce').fillna(0)
@@ -62,9 +64,11 @@ def registrar_auditoria(id_ticket, accion, consultor):
     except: pass
 
 def guardar_seguro(df_nuevo, accion_msg):
+    """Garantiza el grabado con reintentos para evitar pérdida de registros."""
     intentos = 0
     while intentos < 2:
         try:
+            # Eliminamos columnas auxiliares que no pertenecen a la hoja de cálculo
             columnas_finales = df_nuevo.drop(columns=["ID_NUM", "FE_DT"], errors="ignore")
             conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=columnas_finales)
             return True
@@ -74,6 +78,7 @@ def guardar_seguro(df_nuevo, accion_msg):
     return False
 
 def get_index_seguro(lista, valor_buscado):
+    """Busca el índice ignorando mayúsculas y espacios para asegurar coincidencia real."""
     try:
         valor_limpio = str(valor_buscado).strip().upper()
         lista_limpia = [str(item).strip().upper() for item in lista]
@@ -100,7 +105,7 @@ if not st.session_state.autenticado:
                 else: st.error("Credenciales incorrectas")
     st.stop()
 
-# --- CARGA POST-LOGIN ---
+# --- CARGA DE DATOS ---
 nombre_consultor = st.session_state.usuario_logueado
 df_config, df_actual = obtener_config(), obtener_datos_tickets()
 user_match = df_config[df_config["CONSULTOR"] == nombre_consultor] if not df_config.empty else pd.DataFrame()
@@ -108,7 +113,7 @@ user_info = user_match.iloc[0] if not user_match.empty else {"ROL": "USER"}
 es_admin = str(user_info.get("ROL")).upper() == "ADMIN"
 
 # ==========================================
-# 🎯 SIDEBAR
+# 🎯 SIDEBAR (FILTROS)
 # ==========================================
 periodo_sel = "Personalizado"
 with st.sidebar:
@@ -118,7 +123,8 @@ with st.sidebar:
         st.rerun()
     st.divider()
     
-    if st.session_state.menu_activo in ["📊 REPORTES", "📈 DASHBOARDS"]:
+    # El filtro de fecha solo afecta a Reportes, Dashboards y Consultar
+    if st.session_state.menu_activo in ["📊 REPORTES", "📈 DASHBOARDS", "🔍 CONSULTAR"]:
         st.header("📅 Rango y Periodos")
         hoy_dt = date.today()
         periodo_sel = st.selectbox("Accesos Rápidos:", ["Personalizado", "Hoy", "Ayer", "Mes Actual", "Mes Anterior"])
@@ -133,7 +139,8 @@ with st.sidebar:
         f_hasta = st.date_input("Hasta:", value=st.session_state.f_hasta, format="DD/MM/YYYY")
         st.session_state.f_desde, st.session_state.f_hasta = f_desde, f_hasta
     else:
-        f_desde, f_hasta = date(2020, 1, 1), date.today()
+        # Si estamos en NUEVO o MODIFICAR, desactivamos el filtro de fecha para no "perder" registros
+        f_desde, f_hasta = date(2000, 1, 1), date(2100, 1, 1)
 
     st.divider()
     l_cli_f = sorted(df_actual["CLIENTES"].unique()) if not df_actual.empty else []
@@ -146,17 +153,18 @@ with st.sidebar:
     f_ani = st.multiselect("Años:", sorted([a for a in df_actual["ANIO"].unique() if a > 2000], reverse=True) if not df_actual.empty else [])
     f_mes = st.multiselect("Meses:", options=list(mes_d.keys()), format_func=lambda x: mes_d[x])
 
-# Filtrado Maestro
+# --- LÓGICA DE FILTRADO MAESTRO ---
 df_f = df_actual.copy()
 if not df_f.empty and "FE_DT" in df_f.columns:
     df_f = df_f[(df_f["FE_DT"].dt.date >= f_desde) & (df_f["FE_DT"].dt.date <= f_hasta)]
+
 if f_cli: df_f = df_f[df_f["CLIENTES"].isin(f_cli)]
 if f_con: df_f = df_f[df_f["CONSULTOR"].isin(f_con)]
 if f_mod: df_f = df_f[df_f["MODULO"].isin(f_mod)]
 if f_ani: df_f = df_f[df_f["ANIO"].isin(f_ani)]
 if f_mes: df_f = df_f[df_f["MES"].isin(f_mes)]
 
-# Navegación
+# Navegación Superior
 btns = ["➕ NUEVO", "✏️ MODIFICAR", "🔍 CONSULTAR", "📊 REPORTES", "📈 DASHBOARDS"]
 if es_admin: btns.append("⚙️ PERMISOS")
 cols_menu = st.columns(len(btns))
@@ -164,7 +172,7 @@ for i, b in enumerate(btns):
     if cols_menu[i].button(b, use_container_width=True): st.session_state.menu_activo = b
 st.divider()
 
-# Listas maestras
+# Listas de opciones estándar
 OPC_TIPO = ["FUNCIONAL", "TÉCNICA", "COMERCIAL"]
 OPC_PRIO = ["BAJA", "MEDIA", "ALTA"]
 OPC_ESTADO = ["ABIERTO", "EN PROCESO", "CERRADO"]
@@ -204,12 +212,13 @@ if st.session_state.menu_activo == "➕ NUEVO":
                 base_previa = df_actual.drop(columns=["ID_NUM", "FE_DT"], errors="ignore")
                 if guardar_seguro(pd.concat([base_previa, nuevo], ignore_index=True), "ALTA"):
                     registrar_auditoria(proximo_id, f"ALTA ({est_n})", nombre_consultor)
-                    st.success(f"✅ Ticket #{proximo_id} guardado."); time.sleep(1); st.rerun()
+                    st.success(f"✅ Ticket #{proximo_id} registrado correctamente."); time.sleep(1); st.rerun()
 
 # ==========================================
 # ✏️ SOLAPA 2: MODIFICAR
 # ==========================================
 elif st.session_state.menu_activo == "✏️ MODIFICAR":
+    # Aquí usamos df_actual para que aparezcan todos los pendientes sin importar el filtro de fecha
     df_mod = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
     if not df_mod.empty:
         sel_m = st.selectbox("Ticket Pendiente:", df_mod.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['FE_CONSULT']}", axis=1))
@@ -223,7 +232,7 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
         except: f_val = date.today()
 
         with st.form("f_mod"):
-            st.info(f"Editando Ticket #{id_m}")
+            st.info(f"Modificando Ticket #{id_m}")
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.text_input("CONSULTOR", value=dm["CONSULTOR"], disabled=True)
@@ -256,11 +265,11 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                 
                 if guardar_seguro(df_actual, "MODIF"):
                     registrar_auditoria(id_m, f"MODIFICACION ({n_est})", nombre_consultor)
-                    st.success("✅ Ticket actualizado."); time.sleep(1); st.rerun()
-    else: st.warning("No hay tickets pendientes.")
+                    st.success("✅ Registro actualizado correctamente."); time.sleep(1); st.rerun()
+    else: st.warning("No hay tickets pendientes para modificar.")
 
 # ==========================================
-# 📊 REPORTES (DISEÑO PDF RESTAURADO)
+# 📊 REPORTES (SUMATORIA + PIE DE PÁGINA)
 # ==========================================
 elif st.session_state.menu_activo == "📊 REPORTES":
     st.header(f"📊 Reportes: {periodo_sel}")
@@ -287,14 +296,21 @@ elif st.session_state.menu_activo == "📊 REPORTES":
                     df_det.to_excel(w, index=False)
             st.download_button(f"📥 Excel", buf.getvalue(), f"GR_{tipo_xls}{nom_base}.xlsx")
         with c2:
-            # --- RESTAURACIÓN FORMATO PDF ORIGINAL ---
             pdf_a = FPDF(); pdf_a.add_page(); pdf_a.set_font("Arial", 'B', 11)
             pdf_a.cell(0, 8, "FILTROS: " + (f_cli[0] if len(f_cli)==1 else "VARIOS"), ln=True)
             pdf_a.set_font("Arial", 'B', 14); pdf_a.cell(0, 10, "Resumen Analítico", ln=True, align='C')
+            # Datos de la tabla
             for _, r in res.iterrows(): 
                 pdf_a.cell(45, 7, str(r['CLIENTES']), 1)
                 pdf_a.cell(40, 7, str(r['MODULO']), 1)
                 pdf_a.cell(30, 7, str(r['HORAS']), 1, ln=True)
+            # Sumatoria
+            pdf_a.set_font("Arial", 'B', 10)
+            pdf_a.cell(85, 8, "TOTAL HORAS:", 1, 0, 'R')
+            pdf_a.cell(30, 8, f"{t_hs:,.2f}", 1, ln=True)
+            # Pie de página
+            pdf_a.ln(10); pdf_a.set_font("Arial", 'I', 8)
+            pdf_a.cell(0, 10, f"Generado el: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", 0, 0, 'C')
             st.download_button("📥 PDF", pdf_a.output(dest='S').encode('latin-1', 'ignore'), f"Analitico_GR{nom_base}.pdf")
 
 # ==========================================
@@ -317,7 +333,7 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
 # ==========================================
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
     if not df_f.empty:
-        sel_c = st.selectbox("Ficha:", df_f.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['ESTADO']}", axis=1))
+        sel_c = st.selectbox("Ticket:", df_f.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['ESTADO']}", axis=1))
         id_c = int(sel_c.split(" |")[0].replace("#","")); dc = df_f[df_f["ID_NUM"] == id_c].iloc[0]
         with st.container(border=True):
             st.subheader(f"Ticket #{id_c} [{dc['ESTADO']}]")
