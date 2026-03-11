@@ -34,11 +34,9 @@ def obtener_config():
 
 def obtener_datos_tickets():
     try:
-        # Forzamos limpieza de caché interna de Streamlit para traer datos frescos
         df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
         if df is None or df.empty: return pd.DataFrame()
         
-        # Normalización de columnas
         df.columns = [str(c).strip().upper().replace('AÑO', 'ANIO') for c in df.columns]
         
         if "ID_TICKET" in df.columns:
@@ -52,49 +50,37 @@ def obtener_datos_tickets():
         df["MES"] = pd.to_numeric(df.get("MES", 0), errors='coerce').fillna(0).astype(int)
         
         return df.fillna("")
-    except Exception as e:
-        st.error(f"Error al cargar datos: {e}")
+    except:
         return pd.DataFrame()
 
 def registrar_auditoria(id_ticket, accion, consultor):
     try:
-        df_logs = conn.read(spreadsheet=url, worksheet="Log_Auditoria", ttl=0)
+        try: df_logs = conn.read(spreadsheet=url, worksheet="Log_Auditoria", ttl=0)
+        except: df_logs = pd.DataFrame(columns=["ID_TICKET", "CONSULTOR", "FECHA_HORA", "ACCION"])
         nuevo_log = pd.DataFrame([{"ID_TICKET": id_ticket, "CONSULTOR": consultor, "FECHA_HORA": datetime.now().strftime("%d/%m/%Y %H:%M:%S"), "ACCION": accion}])
         conn.update(spreadsheet=url, worksheet="Log_Auditoria", data=pd.concat([df_logs, nuevo_log], ignore_index=True))
     except: pass
 
 def guardar_seguro(df_nuevo, accion_msg):
-    """
-    Función mejorada para asegurar el grabado. 
-    Realiza hasta 2 intentos en caso de fallo de red.
-    """
     intentos = 0
     while intentos < 2:
         try:
-            # Quitamos columnas temporales de cálculo antes de subir
             columnas_finales = df_nuevo.drop(columns=["ID_NUM", "FE_DT"], errors="ignore")
             conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=columnas_finales)
             return True
-        except Exception as e:
+        except:
             intentos += 1
-            time.sleep(1) # Espera un segundo antes de reintentar
-            if intentos == 2:
-                st.error(f"Error crítico al guardar en Google Sheets: {e}")
+            time.sleep(1)
     return False
 
 def get_index_seguro(lista, valor_buscado):
-    """
-    Busca el índice de un valor en una lista de forma robusta.
-    Ignora mayúsculas, minúsculas y espacios.
-    """
     try:
         valor_limpio = str(valor_buscado).strip().upper()
         lista_limpia = [str(item).strip().upper() for item in lista]
         if valor_limpio in lista_limpia:
             return lista_limpia.index(valor_limpio)
         return 0
-    except:
-        return 0
+    except: return 0
 
 # ==========================================
 # 🔐 LOGIN
@@ -150,7 +136,6 @@ with st.sidebar:
         f_desde, f_hasta = date(2020, 1, 1), date.today()
 
     st.divider()
-    # Listas para filtros
     l_cli_f = sorted(df_actual["CLIENTES"].unique()) if not df_actual.empty else []
     l_con_f = sorted(df_actual["CONSULTOR"].unique()) if not df_actual.empty else []
     l_mod_f = sorted(df_actual["MODULO"].unique()) if not df_actual.empty else []
@@ -176,11 +161,10 @@ btns = ["➕ NUEVO", "✏️ MODIFICAR", "🔍 CONSULTAR", "📊 REPORTES", "�
 if es_admin: btns.append("⚙️ PERMISOS")
 cols_menu = st.columns(len(btns))
 for i, b in enumerate(btns):
-    if cols_menu[i].button(b, use_container_width=True): 
-        st.session_state.menu_activo = b
+    if cols_menu[i].button(b, use_container_width=True): st.session_state.menu_activo = b
 st.divider()
 
-# Listas maestras para consistencia entre Nuevo y Modificar
+# Listas maestras
 OPC_TIPO = ["FUNCIONAL", "TÉCNICA", "COMERCIAL"]
 OPC_PRIO = ["BAJA", "MEDIA", "ALTA"]
 OPC_ESTADO = ["ABIERTO", "EN PROCESO", "CERRADO"]
@@ -216,52 +200,23 @@ if st.session_state.menu_activo == "➕ NUEVO":
             if not usu_n.strip() or not con_txt.strip() or tie_n <= 0:
                 st.error("Por favor completa los campos obligatorios (*) y el tiempo.")
             else:
-                nuevo = pd.DataFrame([{
-                    "ID_TICKET": proximo_id, 
-                    "CONSULTOR": nombre_consultor, 
-                    "TIPO_CONS": tipo_n, 
-                    "PRIORIDAD": prio_n, 
-                    "ESTADO": est_n, 
-                    "ATENCION": ate_n, 
-                    "CLIENTES": cli_n, 
-                    "USUARIO": usu_n, 
-                    "FE_CONSULT": fe_n.strftime('%d/%m/%Y'), 
-                    "MODULO": mod_n, 
-                    "CONSULTAS": con_txt, 
-                    "RESPUESTAS": rta_txt, 
-                    "TIEMPO_RES": tie_n, 
-                    "ONLINE": on_n, 
-                    "ANIO": fe_n.year, 
-                    "MES": fe_n.month
-                }])
-                
-                # Concatenamos con la base actual (sin columnas calculadas)
+                nuevo = pd.DataFrame([{"ID_TICKET": proximo_id, "CONSULTOR": nombre_consultor, "TIPO_CONS": tipo_n, "PRIORIDAD": prio_n, "ESTADO": est_n, "ATENCION": ate_n, "CLIENTES": cli_n, "USUARIO": usu_n, "FE_CONSULT": fe_n.strftime('%d/%m/%Y'), "MODULO": mod_n, "CONSULTAS": con_txt, "RESPUESTAS": rta_txt, "TIEMPO_RES": tie_n, "ONLINE": on_n, "ANIO": fe_n.year, "MES": fe_n.month}])
                 base_previa = df_actual.drop(columns=["ID_NUM", "FE_DT"], errors="ignore")
-                df_final = pd.concat([base_previa, nuevo], ignore_index=True)
-                
-                if guardar_seguro(df_final, "ALTA"):
+                if guardar_seguro(pd.concat([base_previa, nuevo], ignore_index=True), "ALTA"):
                     registrar_auditoria(proximo_id, f"ALTA ({est_n})", nombre_consultor)
-                    st.success(f"✅ Ticket #{proximo_id} guardado con éxito."); time.sleep(1)
-                    st.rerun()
+                    st.success(f"✅ Ticket #{proximo_id} guardado."); time.sleep(1); st.rerun()
 
 # ==========================================
 # ✏️ SOLAPA 2: MODIFICAR
 # ==========================================
 elif st.session_state.menu_activo == "✏️ MODIFICAR":
-    # Traer solo tickets pendientes o en proceso
     df_mod = df_actual[df_actual["ESTADO"].str.upper().isin(["ABIERTO", "EN PROCESO"])].copy()
-    
     if not df_mod.empty:
-        # Selector de Ticket
-        opciones_ticket = df_mod.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['FE_CONSULT']}", axis=1).tolist()
-        sel_m = st.selectbox("Seleccione el Ticket a editar:", opciones_ticket)
-        
-        # Extraer ID y obtener la fila exacta
+        sel_m = st.selectbox("Ticket Pendiente:", df_mod.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['FE_CONSULT']}", axis=1))
         id_m = int(sel_m.split(" |")[0].replace("#",""))
         idx_f = df_actual.index[df_actual["ID_NUM"] == id_m].tolist()[0]
         dm = df_actual.loc[idx_f]
         
-        # --- PREPARACIÓN DE FECHA ---
         try:
             f_val = pd.to_datetime(dm["FE_CONSULT"], dayfirst=True, errors='coerce')
             f_val = f_val.date() if not pd.isna(f_val) else date.today()
@@ -276,9 +231,8 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                 n_prio = st.selectbox("PRIORIDAD", OPC_PRIO, index=get_index_seguro(OPC_PRIO, dm["PRIORIDAD"]))
                 n_est = st.selectbox("ESTADO", OPC_ESTADO, index=get_index_seguro(OPC_ESTADO, dm["ESTADO"]))
             with c2:
-                # Usar la lista de clientes real de la base para que no falte ninguno
-                lista_clientes_db = sorted(df_actual["CLIENTES"].unique().tolist())
-                n_cli = st.selectbox("CLIENTES", lista_clientes_db, index=get_index_seguro(lista_clientes_db, dm["CLIENTES"]))
+                lista_c_db = sorted(df_actual["CLIENTES"].unique().tolist())
+                n_cli = st.selectbox("CLIENTES", lista_c_db, index=get_index_seguro(lista_c_db, dm["CLIENTES"]))
                 n_usu = st.text_input("USUARIO", value=str(dm["USUARIO"]))
                 n_ate = st.selectbox("ATENCION", OPC_ATE, index=get_index_seguro(OPC_ATE, dm["ATENCION"]))
                 n_on = st.radio("ONLINE", ["SI", "NO"], index=0 if str(dm["ONLINE"]).upper()=="SI" else 1, horizontal=True)
@@ -291,36 +245,28 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
             n_rta = st.text_area("RESPUESTAS", value=str(dm["RESPUESTAS"]))
             
             if st.form_submit_button("🔥 ACTUALIZAR REGISTRO"):
-                # Actualizamos la fila en el dataframe principal
-                df_actual.at[idx_f, "TIPO_CONS"] = n_tipo
-                df_actual.at[idx_f, "PRIORIDAD"] = n_prio
-                df_actual.at[idx_f, "ESTADO"] = n_est
-                df_actual.at[idx_f, "CLIENTES"] = n_cli
-                df_actual.at[idx_f, "USUARIO"] = n_usu
-                df_actual.at[idx_f, "ATENCION"] = n_ate
-                df_actual.at[idx_f, "ONLINE"] = n_on
-                df_actual.at[idx_f, "MODULO"] = n_mod
+                df_actual.at[idx_f, "TIPO_CONS"], df_actual.at[idx_f, "PRIORIDAD"] = n_tipo, n_prio
+                df_actual.at[idx_f, "ESTADO"], df_actual.at[idx_f, "CLIENTES"] = n_est, n_cli
+                df_actual.at[idx_f, "USUARIO"], df_actual.at[idx_f, "ATENCION"] = n_usu, n_ate
+                df_actual.at[idx_f, "ONLINE"], df_actual.at[idx_f, "MODULO"] = n_on, n_mod
                 df_actual.at[idx_f, "FE_CONSULT"] = n_fe.strftime('%d/%m/%Y')
-                df_actual.at[idx_f, "TIEMPO_RES"] = n_tie
-                df_actual.at[idx_f, "CONSULTAS"] = n_con
+                df_actual.at[idx_f, "TIEMPO_RES"], df_actual.at[idx_f, "CONSULTAS"] = n_tie, n_con
                 df_actual.at[idx_f, "RESPUESTAS"] = n_rta
-                df_actual.at[idx_f, "ANIO"] = n_fe.year
-                df_actual.at[idx_f, "MES"] = n_fe.month
+                df_actual.at[idx_f, "ANIO"], df_actual.at[idx_f, "MES"] = n_fe.year, n_fe.month
                 
                 if guardar_seguro(df_actual, "MODIF"):
                     registrar_auditoria(id_m, f"MODIFICACION ({n_est})", nombre_consultor)
-                    st.success("✅ Ticket actualizado correctamente."); time.sleep(1)
-                    st.rerun()
-    else: st.warning("No hay tickets con estado ABIERTO o EN PROCESO para modificar.")
+                    st.success("✅ Ticket actualizado."); time.sleep(1); st.rerun()
+    else: st.warning("No hay tickets pendientes.")
 
 # ==========================================
-# 📊 REPORTES
+# 📊 REPORTES (DISEÑO PDF RESTAURADO)
 # ==========================================
 elif st.session_state.menu_activo == "📊 REPORTES":
     st.header(f"📊 Reportes: {periodo_sel}")
     if not df_f.empty:
         t_hs = df_f["TIEMPO_RES"].sum() / 60
-        st.metric("Horas Totales en este filtro", f"{t_hs:,.2f} hs")
+        st.metric("Horas Totales", f"{t_hs:,.2f} hs")
         res = df_f.groupby(["CLIENTES", "MODULO", "CONSULTOR"])["TIEMPO_RES"].sum().reset_index()
         res["HORAS"] = (res["TIEMPO_RES"]/60).round(2)
         st.dataframe(res, use_container_width=True, hide_index=True)
@@ -337,16 +283,19 @@ elif st.session_state.menu_activo == "📊 REPORTES":
                 if "Resumido" in tipo_xls: res.to_excel(w, index=False)
                 else:
                     df_det = df_f[["ID_TICKET", "FE_CONSULT", "CLIENTES", "MODULO", "CONSULTOR", "USUARIO", "TIEMPO_RES"]].copy()
-                    df_det["HORAS"] = (df_det["TIEMPO_RES"]/60).round(2)
+                    df_det["HORAS"] = (df_det["TIEMPO_RES"]/60).round(2); df_det["CONSULTAS"] = df_f["CONSULTAS"]; df_det["RESPUESTAS"] = df_f["RESPUESTAS"]
                     df_det.to_excel(w, index=False)
-            st.download_button(f"📥 Descargar Excel", buf.getvalue(), f"GR_{tipo_xls}{nom_base}.xlsx")
+            st.download_button(f"📥 Excel", buf.getvalue(), f"GR_{tipo_xls}{nom_base}.xlsx")
         with c2:
+            # --- RESTAURACIÓN FORMATO PDF ORIGINAL ---
             pdf_a = FPDF(); pdf_a.add_page(); pdf_a.set_font("Arial", 'B', 11)
-            pdf_a.cell(0, 8, f"REPORTE GR CONSULTING - {nom_base}", ln=True)
-            pdf_a.set_font("Arial", '', 10)
-            for _, r in res.iterrows():
-                pdf_a.cell(0, 7, f"{r['CLIENTES']} | {r['MODULO']} | {r['HORAS']} hs", ln=True)
-            st.download_button("📥 Descargar PDF", pdf_a.output(dest='S').encode('latin-1', 'ignore'), f"Analitico_GR{nom_base}.pdf")
+            pdf_a.cell(0, 8, "FILTROS: " + (f_cli[0] if len(f_cli)==1 else "VARIOS"), ln=True)
+            pdf_a.set_font("Arial", 'B', 14); pdf_a.cell(0, 10, "Resumen Analítico", ln=True, align='C')
+            for _, r in res.iterrows(): 
+                pdf_a.cell(45, 7, str(r['CLIENTES']), 1)
+                pdf_a.cell(40, 7, str(r['MODULO']), 1)
+                pdf_a.cell(30, 7, str(r['HORAS']), 1, ln=True)
+            st.download_button("📥 PDF", pdf_a.output(dest='S').encode('latin-1', 'ignore'), f"Analitico_GR{nom_base}.pdf")
 
 # ==========================================
 # 📈 DASHBOARDS
@@ -355,25 +304,20 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
     if not df_f.empty:
         df_dash = pd.merge(df_f, df_config[["CONSULTOR", "VALOR_HORA"]], on="CONSULTOR", how="left").fillna(0)
         tab1, tab2, tab3 = st.tabs(["📋 Operativo", "⚡ Performance", "💰 Financiero"])
-        with tab1: 
-            st.subheader("Tiempo por Módulo")
-            st.bar_chart(df_dash.groupby("MODULO")["TIEMPO_RES"].sum())
+        with tab1: st.bar_chart(df_dash.groupby("MODULO")["TIEMPO_RES"].sum())
         with tab2:
-            st.subheader("Evolución de Tiempos")
             df_p = df_dash.groupby(["FE_DT", "CONSULTOR"]).agg({"TIEMPO_RES":"sum"}).reset_index()
             st.line_chart(df_p.set_index("FE_DT")["TIEMPO_RES"])
         with tab3:
             df_dash["COSTO"] = (df_dash["TIEMPO_RES"]/60) * pd.to_numeric(df_dash["VALOR_HORA"], errors='coerce').fillna(0)
-            st.metric("Inversión Total Estimada", f"$ {df_dash['COSTO'].sum():,.2f}")
-    else:
-        st.info("No hay datos para mostrar en el Dashboard con los filtros actuales.")
+            st.metric("Inversión Total", f"$ {df_dash['COSTO'].sum():,.2f}")
 
 # ==========================================
 # 🔍 CONSULTAR
 # ==========================================
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
     if not df_f.empty:
-        sel_c = st.selectbox("Buscar Ticket:", df_f.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['ESTADO']}", axis=1))
+        sel_c = st.selectbox("Ficha:", df_f.apply(lambda r: f"#{r['ID_NUM']} | {r['CLIENTES']} | {r['ESTADO']}", axis=1))
         id_c = int(sel_c.split(" |")[0].replace("#","")); dc = df_f[df_f["ID_NUM"] == id_c].iloc[0]
         with st.container(border=True):
             st.subheader(f"Ticket #{id_c} [{dc['ESTADO']}]")
@@ -387,9 +331,6 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
 # ⚙️ PERMISOS
 # ==========================================
 elif st.session_state.menu_activo == "⚙️ PERMISOS" and es_admin:
-    st.subheader("Gestión de Consultores y Accesos")
     df_ed = st.data_editor(df_config, num_rows="dynamic", hide_index=True)
-    if st.button("💾 Guardar Cambios en Configuración"): 
-        conn.update(spreadsheet=url, worksheet="Config_Consultores", data=df_ed)
-        st.success("Configuración actualizada correctamente.")
-        st.rerun()
+    if st.button("💾 Guardar"): 
+        conn.update(spreadsheet=url, worksheet="Config_Consultores", data=df_ed); st.rerun()
