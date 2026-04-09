@@ -1,15 +1,22 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
+from supabase import create_client, Client
 import pandas as pd
 from datetime import datetime, date, timedelta
 import io
 from fpdf import FPDF
 import time
+import os
 
 # 1. CONFIGURACIÓN E IDENTIFICACIÓN MAESTRA
 st.set_page_config(page_title="GR Consulting - Gestión Integral BI", layout="wide")
-url = "https://docs.google.com/spreadsheets/d/1VawCQZ7dsadzZz_BoGyZwX_8he9RqvmAESHvd_B1pj0/"
-conn = st.connection("gsheets", type=GSheetsConnection)
+
+@st.cache_resource
+def init_supabase():
+    url = st.secrets.get("SUPABASE_URL", "")
+    key = st.secrets.get("SUPABASE_KEY", "")
+    return create_client(url, key) if url and key else None
+
+supabase: Client = init_supabase()
 
 # --- ESTADO DE SESIÓN ---
 if "autenticado" not in st.session_state: st.session_state.autenticado = False
@@ -23,9 +30,11 @@ mes_d = {1:"Ene", 2:"Feb", 3:"Mar", 4:"Abr", 5:"May", 6:"Jun", 7:"Jul", 8:"Ago",
 
 # --- FUNCIONES DE CARGA Y PROTECCIÓN ---
 def obtener_config():
+    if not supabase: return pd.DataFrame()
     try:
-        df = conn.read(spreadsheet=url, worksheet="Config_Consultores", ttl=0)
-        if df.empty: return pd.DataFrame()
+        response = supabase.table("config_consultores").select("*").execute()
+        if not response.data: return pd.DataFrame()
+        df = pd.DataFrame(response.data)
         df.columns = [str(c).strip().upper() for c in df.columns]
         for col in df.columns:
             df[col] = df[col].astype(str).str.strip().str.upper().str.replace(r"\.0$", "", regex=True)
@@ -33,9 +42,11 @@ def obtener_config():
     except: return pd.DataFrame()
 
 def obtener_datos_tickets():
+    if not supabase: return pd.DataFrame()
     try:
-        df = conn.read(spreadsheet=url, worksheet="BD_Dashboard_Servicios", ttl=0)
-        if df is None or df.empty: return pd.DataFrame()
+        response = supabase.table("bd_dashboard_servicios").select("*").execute()
+        if not response.data: return pd.DataFrame()
+        df = pd.DataFrame(response.data)
         df.columns = [str(c).strip().upper().replace('AÑO', 'ANIO') for c in df.columns]
         if "ID_TICKET" in df.columns:
             df["ID_NUM"] = pd.to_numeric(df["ID_TICKET"], errors='coerce').fillna(0).astype(int)
@@ -48,21 +59,26 @@ def obtener_datos_tickets():
     except: return pd.DataFrame()
 
 def registrar_auditoria(id_ticket, accion, consultor):
+    if not supabase: return
     try:
-        try: df_logs = conn.read(spreadsheet=url, worksheet="Log_Auditoria", ttl=0)
-        except: df_logs = pd.DataFrame(columns=["ID_TICKET", "CONSULTOR", "FECHA_HORA", "ACCION"])
-        nuevo_log = pd.DataFrame([{"ID_TICKET": id_ticket, "CONSULTOR": consultor, "FECHA_HORA": datetime.now().strftime("%d/%m/%Y %H:%M:%S"), "ACCION": accion}])
-        conn.update(spreadsheet=url, worksheet="Log_Auditoria", data=pd.concat([df_logs, nuevo_log], ignore_index=True))
+        data = {
+            "id_ticket": int(id_ticket), 
+            "consultor": consultor, 
+            "fecha_hora": datetime.now().strftime("%d/%m/%Y %H:%M:%S"), 
+            "accion": accion
+        }
+        supabase.table("log_auditoria").insert(data).execute()
     except: pass
 
-def guardar_seguro(df_nuevo, accion_msg):
+def guardar_seguro(data_dict, accion_msg):
+    if not supabase: return False
     intentos = 0
     while intentos < 2:
         try:
-            columnas_finales = df_nuevo.drop(columns=["ID_NUM", "FE_DT"], errors="ignore")
-            conn.update(spreadsheet=url, worksheet="BD_Dashboard_Servicios", data=columnas_finales)
+            clean_dict = {k.lower(): v for k, v in data_dict.items() if k.upper() not in ["ID_NUM", "FE_DT"]}
+            supabase.table("bd_dashboard_servicios").upsert(clean_dict).execute()
             return True
-        except:
+        except Exception as e:
             intentos += 1
             time.sleep(1)
     return False
@@ -187,9 +203,8 @@ if st.session_state.menu_activo == "➕ NUEVO":
         if st.form_submit_button("💾 GUARDAR TICKET"):
             if not usu_n.strip() or not con_txt.strip() or tie_n <= 0: st.error("Completa campos obligatorios.")
             else:
-                nuevo = pd.DataFrame([{"ID_TICKET": proximo_id, "CONSULTOR": nombre_consultor, "TIPO_CONS": tipo_n, "PRIORIDAD": prio_n, "ESTADO": est_n, "ATENCION": ate_n, "CLIENTES": cli_n, "USUARIO": usu_n, "FE_CONSULT": fe_n.strftime('%d/%m/%Y'), "MODULO": mod_n, "CONSULTAS": con_txt, "RESPUESTAS": rta_txt, "TIEMPO_RES": tie_n, "ONLINE": on_n, "ANIO": fe_n.year, "MES": fe_n.month}])
-                base_previa = df_actual.drop(columns=["ID_NUM", "FE_DT"], errors="ignore")
-                if guardar_seguro(pd.concat([base_previa, nuevo], ignore_index=True), "ALTA"):
+                nuevo_dict = {"ID_TICKET": proximo_id, "CONSULTOR": nombre_consultor, "TIPO_CONS": tipo_n, "PRIORIDAD": prio_n, "ESTADO": est_n, "ATENCION": ate_n, "CLIENTES": cli_n, "USUARIO": usu_n, "FE_CONSULT": fe_n.strftime('%d/%m/%Y'), "MODULO": mod_n, "CONSULTAS": con_txt, "RESPUESTAS": rta_txt, "TIEMPO_RES": tie_n, "ONLINE": on_n, "ANIO": fe_n.year, "MES": fe_n.month}
+                if guardar_seguro(nuevo_dict, "ALTA"):
                     registrar_auditoria(proximo_id, f"ALTA ({est_n})", nombre_consultor)
                     st.success(f"✅ Ticket #{proximo_id} guardado."); time.sleep(1); st.rerun()
 
@@ -225,14 +240,14 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                 n_tie = st.number_input("TIEMPO_RES", value=int(pd.to_numeric(dm["TIEMPO_RES"], errors='coerce') or 0))
             n_con = st.text_area("CONSULTAS", value=str(dm["CONSULTAS"])); n_rta = st.text_area("RESPUESTAS", value=str(dm["RESPUESTAS"]))
             if st.form_submit_button("🔥 ACTUALIZAR REGISTRO"):
-                df_actual.at[idx_f, "TIPO_CONS"], df_actual.at[idx_f, "PRIORIDAD"] = n_tipo, n_prio
-                df_actual.at[idx_f, "ESTADO"], df_actual.at[idx_f, "CLIENTES"] = n_est, n_cli
-                df_actual.at[idx_f, "USUARIO"], df_actual.at[idx_f, "ATENCION"] = n_usu, n_ate
-                df_actual.at[idx_f, "ONLINE"], df_actual.at[idx_f, "MODULO"] = n_on, n_mod
-                df_actual.at[idx_f, "FE_CONSULT"] = n_fe.strftime('%d/%m/%Y')
-                df_actual.at[idx_f, "TIEMPO_RES"], df_actual.at[idx_f, "CONSULTAS"] = n_tie, n_con
-                df_actual.at[idx_f, "RESPUESTAS"] = n_rta; df_actual.at[idx_f, "ANIO"], df_actual.at[idx_f, "MES"] = n_fe.year, n_fe.month
-                if guardar_seguro(df_actual, "MODIF"):
+                upd_dict = {
+                    "ID_TICKET": int(id_m), "CONSULTOR": dm["CONSULTOR"], "TIPO_CONS": n_tipo, 
+                    "PRIORIDAD": n_prio, "ESTADO": n_est, "ATENCION": n_ate, "CLIENTES": n_cli,
+                    "USUARIO": n_usu, "FE_CONSULT": n_fe.strftime('%d/%m/%Y'), "MODULO": n_mod,
+                    "CONSULTAS": n_con, "RESPUESTAS": n_rta, "TIEMPO_RES": n_tie, "ONLINE": n_on,
+                    "ANIO": n_fe.year, "MES": n_fe.month
+                }
+                if guardar_seguro(upd_dict, "MODIF"):
                     registrar_auditoria(id_m, f"MODIFICACION ({n_est})", nombre_consultor)
                     st.success("✅ Registro actualizado correctamente."); time.sleep(1); st.rerun()
     else: st.warning("No hay tickets pendientes.")
@@ -356,4 +371,12 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
 
 elif st.session_state.menu_activo == "⚙️ PERMISOS" and es_admin:
     df_ed = st.data_editor(df_config, num_rows="dynamic", hide_index=True)
-    if st.button("💾 Guardar"): conn.update(spreadsheet=url, worksheet="Config_Consultores", data=df_ed); st.rerun()
+    if st.button("💾 Guardar"):
+        if supabase:
+            for _, row in df_ed.iterrows():
+                try:
+                    row_dict = {str(k).lower(): v for k, v in row.to_dict().items()}
+                    supabase.table("config_consultores").upsert(row_dict).execute()
+                except:
+                    pass
+        st.rerun()
