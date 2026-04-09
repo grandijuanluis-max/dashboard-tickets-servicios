@@ -245,13 +245,13 @@ if not st.session_state.autenticado:
             c_in = st.text_input("Consultor").strip().upper()
             p_in = st.text_input("Contraseña", type="password").strip()
             if st.form_submit_button("INGRESAR", use_container_width=True):
-            df_u = obtener_config()
-            if not df_u.empty and "CONSULTOR" in df_u.columns:
-                match = df_u[(df_u["CONSULTOR"] == c_in) & (df_u["PASSWORD"] == p_in)]
-                if not match.empty:
-                    st.session_state.autenticado, st.session_state.usuario_logueado = True, c_in
-                    st.rerun()
-                else: st.error("Credenciales incorrectas")
+                df_u = obtener_config()
+                if not df_u.empty and "CONSULTOR" in df_u.columns:
+                    match = df_u[(df_u["CONSULTOR"] == c_in) & (df_u["PASSWORD"] == p_in)]
+                    if not match.empty:
+                        st.session_state.autenticado, st.session_state.usuario_logueado = True, c_in
+                        st.rerun()
+                    else: st.error("Credenciales incorrectas")
     st.stop()
 
 # --- CARGA DE DATOS ---
