@@ -10,146 +10,122 @@ import os
 # 1. CONFIGURACIÓN E IDENTIFICACIÓN MAESTRA
 st.set_page_config(page_title="GR Consulting - Gestión Integral BI", layout="wide", page_icon="📈")
 
-def cargar_estilos_premium():
-    bg_encoded = ""
-    import base64
-    import os
-    
-    bg_path = "/Users/juanluisgrandi/AI/Grandi_Consulting/bg_premium.png"
-    src_path = "/Users/juanluisgrandi/.gemini/antigravity/brain/39e41a8b-2112-42bf-baef-bf02d569d5c1/office_option_2_1775696785781.png"
-    
-    if not os.path.exists(bg_path) and os.path.exists(src_path):
-        import shutil
-        try: shutil.copy(src_path, bg_path)
-        except: pass
-        
-    if os.path.exists(bg_path):
-        with open(bg_path, "rb") as f:
-            bg_encoded = base64.b64encode(f.read()).decode()
-            
-    css_bg = f"background-image: url('data:image/png;base64,{bg_encoded}');" if bg_encoded else "background: linear-gradient(180deg, #1f2227 0%, #111215 100%);"
-
-    st.markdown(f"""
+def cargar_estilos_claros():
+    st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Outfit:wght@400;700&display=swap');
 
-html, body, [class*="css"]  {{
+html, body, [class*="css"] {
     font-family: 'Inter', sans-serif;
-}}
-h1, h2, h3, h4, h5, h6 {{
+    color: #1E293B; /* Texto oscuro/azulado */
+}
+h1, h2, h3, h4, h5, h6 {
     font-family: 'Outfit', sans-serif !important;
-    color: #6EE7B7 !important;
-}}
-.stApp {{
-    {css_bg}
-    background-size: cover;
-    background-position: center;
-    background-attachment: fixed;
-}}
-/* MÁSCARA NEGRA PREMIUM COMO ANHSA */
-.stApp::before {{
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: linear-gradient(180deg, rgba(31, 34, 39, 0.4) 0%, rgba(31, 34, 39, 0.95) 100%);
-    z-index: 0;
-    pointer-events: none;
-}}
-/* EL CONTENIDO ARRIBA DE LA MASCARA */
-.block-container {{
-    position: relative;
-    z-index: 1;
-}}
-p, span, div {{
-    color: #E2E8F0;
-}}
-/* Top menu buttons (navigation) */
-.stButton > button {{
-    background: rgba(31, 34, 39, 0.7);
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(110, 231, 183, 0.2);
-    border-radius: 12px;
-    color: #10B981;
-    transition: all 0.3s ease;
-}}
-.stButton > button:hover {{
-    background: rgba(16, 185, 129, 0.2);
-    border: 1px solid #10B981;
-    box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
-    color: #FFF;
-}}
-/* Forms & Inputs */
+    color: #0F172A !important;
+}
+/* Fondo Claro */
+.stApp {
+    background-color: #F8FAFC !important;
+    background-image: radial-gradient(#CBD5E1 1px, transparent 1px) !important;
+    background-size: 20px 20px !important;
+}
+.block-container {
+    padding-top: 2rem !important;
+}
+p, span, div, label {
+    color: #334155 !important;
+}
+/* Botones de Navegación */
+.stButton > button, .stDownloadButton > button {
+    background: #FFFFFF !important;
+    border: 1px solid #94A3B8 !important;
+    border-radius: 8px !important;
+    color: #0284C7 !important; /* Celeste Encendido */
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+}
+.stButton > button:hover, .stDownloadButton > button:hover {
+    background: #E0F2FE !important; /* Fondo celeste suave al mouse */
+    border-color: #0284C7 !important;
+    color: #0369A1 !important; /* Azul más fuerte */
+    box-shadow: 0 4px 6px -1px rgba(2, 132, 199, 0.1) !important;
+}
+/* Formularios */
 .stTextInput > div > div > input, 
 .stSelectbox > div > div > div, 
 .stNumberInput > div > div > input, 
 .stDateInput > div > div > input,
-.stTextArea > div > div > textarea {{
-    background: rgba(31, 34, 39, 0.6) !important;
-    border: 1px solid rgba(110, 231, 183, 0.2) !important;
-    color: #FFF !important;
-    border-radius: 8px !important;
-}}
+.stTextArea > div > div > textarea {
+    background: #FFFFFF !important;
+    border: 1px solid #CBD5E1 !important;
+    color: #0F172A !important;
+    border-radius: 6px !important;
+}
 .stTextInput > div > div > input:focus,
 .stSelectbox > div > div > div:focus,
-.stTextArea > div > div > textarea:focus {{
-    border: 1px solid #10B981 !important;
-    box-shadow: 0 0 8px rgba(16, 185, 129, 0.5) !important;
-}}
-.stTextInput label, .stSelectbox label, .stNumberInput label, .stDateInput label, .stTextArea label {{
-    color: #10B981 !important;
+.stTextArea > div > div > textarea:focus {
+    border: 1px solid #0284C7 !important; /* Resalta en Celeste */
+    box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.2) !important;
+}
+.stTextInput label, .stSelectbox label, .stNumberInput label, .stDateInput label, .stTextArea label {
+    color: #475569 !important; /* Gris Verdoso */
     font-weight: 600 !important;
-}}
-/* Fix Dropdowns Text Visibility */
+}
+/* Métricas Totales */
+[data-testid="stMetric"] {
+    background: #FFFFFF !important;
+    border: 1px solid #E2E8F0 !important;
+    border-left: 4px solid #0284C7 !important; /* Linea lateral celeste */
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+[data-testid="stMetricValue"] { color: #0F172A !important; font-family: 'Outfit', sans-serif; }
+[data-testid="stMetricLabel"] { color: #64748B !important; font-weight: bold; }
+/* Dataframes / Tablas */
+[data-testid="stDataFrame"] {
+    background: #FFFFFF !important;
+    border-radius: 8px !important;
+    border: 1px solid #E2E8F0 !important;
+}
+/* Desplegables oscuros sobre claro */
 [data-baseweb="popover"] div, 
 [data-baseweb="popover"] span, 
 [data-baseweb="menu"] div, 
-[data-baseweb="menu"] span {{
+[data-baseweb="menu"] span {
     color: #1a1a1a !important;
-}}
-/* Metrics (Horas Totales, etc) */
-[data-testid="stMetric"] {{
-    background: rgba(31, 34, 39, 0.7) !important;
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(16, 185, 129, 0.3) !important;
-    border-radius: 16px;
-    padding: 15px;
-    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
-}}
-[data-testid="stMetricValue"] {{ color: #FFF !important; font-family: 'Outfit', sans-serif; }}
-[data-testid="stMetricLabel"] {{ color: #10B981 !important; font-weight: bold; }}
-/* Dataframes and tables background */
-[data-testid="stDataFrame"] {{
-    background: rgba(31, 34, 39, 0.8) !important;
-    border-radius: 12px;
-    border: 1px solid rgba(110, 231, 183, 0.1);
-}}
+}
 /* Sidebar */
-[data-testid="stSidebar"] {{
-    background: rgba(20, 22, 26, 0.95);
-    border-right: 1px solid rgba(110, 231, 183, 0.1);
-}}
-/* Dividers */
-hr {{ border-color: rgba(16, 185, 129, 0.2) !important; margin: 2em 0px; }}
-/* Information boxes (Status, Success, Warnings) */
-.stAlert {{
-    background: rgba(31, 34, 39, 0.8) !important;
-    color: #FFF !important;
-    border-radius: 12px !important;
-}}
-button[kind="primary"] {{
-    background: linear-gradient(90deg, #10B981 0%, #6EE7B7 100%) !important;
-    color: #1a1a1a !important;
+[data-testid="stSidebar"] {
+    background: #FFFFFF;
+    border-right: 1px solid #E2E8F0;
+}
+/* Separadores */
+hr { border-color: #E2E8F0 !important; margin: 2em 0px; }
+/* Caja Info */
+.stAlert {
+    background: #F1F5F9 !important;
+    color: #1E293B !important;
+    border-radius: 8px !important;
+}
+/* Botones Principales -> NARANJA */
+button[kind="primary"] {
+    background: #F97316 !important; /* Naranja espectacular */
+    color: #FFFFFF !important;
     font-weight: bold !important;
     border: none !important;
-}}
-button[kind="primary"]:hover {{
-    box-shadow: 0 0 20px rgba(16, 185, 129, 0.6) !important;
-    transform: scale(1.02);
-}}
+    border-radius: 8px !important;
+    box-shadow: 0 4px 6px -1px rgba(249, 115, 22, 0.2) !important;
+}
+button[kind="primary"]:hover {
+    background: #EA580C !important;
+    transform: translateY(-1px);
+}
 </style>
 """, unsafe_allow_html=True)
 
-cargar_estilos_premium()
+cargar_estilos_claros()
 
 @st.cache_resource
 def init_supabase():
@@ -291,8 +267,6 @@ with st.sidebar:
     st.divider()
     l_cli_f = sorted(df_actual["CLIENTES"].unique()) if not df_actual.empty else []
     l_con_f = sorted(df_actual["CONSULTOR"].unique()) if not df_actual.empty else []
-    
-    # MODIFICACIÓN: El filtro de módulos ahora lee TODOS los módulos existentes en la BD
     l_mod_f = sorted(df_actual["MODULO"].unique()) if not df_actual.empty else []
     
     f_cli = st.multiselect("Clientes:", l_cli_f)
