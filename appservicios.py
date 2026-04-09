@@ -8,7 +8,147 @@ import time
 import os
 
 # 1. CONFIGURACIÓN E IDENTIFICACIÓN MAESTRA
-st.set_page_config(page_title="GR Consulting - Gestión Integral BI", layout="wide")
+st.set_page_config(page_title="GR Consulting - Gestión Integral BI", layout="wide", page_icon="📈")
+
+def cargar_estilos_premium():
+    bg_encoded = ""
+    import base64
+    import os
+    import shutil
+    
+    bg_path = "bg_premium.png"
+    src_path = "/Users/juanluisgrandi/.gemini/antigravity/brain/39e41a8b-2112-42bf-baef-bf02d569d5c1/office_option_2_1775696785781.png"
+    if not os.path.exists(bg_path) and os.path.exists(src_path):
+        try: shutil.copy(src_path, bg_path)
+        except: pass
+        
+    if os.path.exists(bg_path):
+        with open(bg_path, "rb") as f:
+            bg_encoded = base64.b64encode(f.read()).decode()
+            
+    css_bg = f"background-image: url('data:image/png;base64,{bg_encoded}');" if bg_encoded else "background: linear-gradient(180deg, #1f2227 0%, #111215 100%);"
+
+    st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Outfit:wght@400;700&display=swap');
+
+html, body, [class*="css"]  {{
+    font-family: 'Inter', sans-serif;
+}}
+h1, h2, h3, h4, h5, h6 {{
+    font-family: 'Outfit', sans-serif !important;
+    color: #6EE7B7 !important;
+}}
+.stApp {{
+    {css_bg}
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+}}
+/* MÁSCARA NEGRA PREMIUM COMO ANHSA */
+.stApp::before {{
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(180deg, rgba(31, 34, 39, 0.4) 0%, rgba(31, 34, 39, 0.95) 100%);
+    z-index: 0;
+    pointer-events: none;
+}}
+/* EL CONTENIDO ARRIBA DE LA MASCARA */
+.block-container {{
+    position: relative;
+    z-index: 1;
+}}
+p, span, div {{
+    color: #E2E8F0;
+}}
+/* Top menu buttons (navigation) */
+.stButton > button {{
+    background: rgba(31, 34, 39, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(110, 231, 183, 0.2);
+    border-radius: 12px;
+    color: #10B981;
+    transition: all 0.3s ease;
+}}
+.stButton > button:hover {{
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid #10B981;
+    box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
+    color: #FFF;
+}}
+/* Forms & Inputs */
+.stTextInput > div > div > input, 
+.stSelectbox > div > div > div, 
+.stNumberInput > div > div > input, 
+.stDateInput > div > div > input,
+.stTextArea > div > div > textarea {{
+    background: rgba(31, 34, 39, 0.6) !important;
+    border: 1px solid rgba(110, 231, 183, 0.2) !important;
+    color: #FFF !important;
+    border-radius: 8px !important;
+}}
+.stTextInput > div > div > input:focus,
+.stSelectbox > div > div > div:focus,
+.stTextArea > div > div > textarea:focus {{
+    border: 1px solid #10B981 !important;
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.5) !important;
+}}
+.stTextInput label, .stSelectbox label, .stNumberInput label, .stDateInput label, .stTextArea label {{
+    color: #10B981 !important;
+    font-weight: 600 !important;
+}}
+/* Fix Dropdowns Text Visibility */
+[data-baseweb="popover"] div, 
+[data-baseweb="popover"] span, 
+[data-baseweb="menu"] div, 
+[data-baseweb="menu"] span {{
+    color: #1a1a1a !important;
+}}
+/* Metrics (Horas Totales, etc) */
+[data-testid="stMetric"] {{
+    background: rgba(31, 34, 39, 0.7) !important;
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(16, 185, 129, 0.3) !important;
+    border-radius: 16px;
+    padding: 15px;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+}}
+[data-testid="stMetricValue"] {{ color: #FFF !important; font-family: 'Outfit', sans-serif; }}
+[data-testid="stMetricLabel"] {{ color: #10B981 !important; font-weight: bold; }}
+/* Dataframes and tables background */
+[data-testid="stDataFrame"] {{
+    background: rgba(31, 34, 39, 0.8) !important;
+    border-radius: 12px;
+    border: 1px solid rgba(110, 231, 183, 0.1);
+}}
+/* Sidebar */
+[data-testid="stSidebar"] {{
+    background: rgba(20, 22, 26, 0.95);
+    border-right: 1px solid rgba(110, 231, 183, 0.1);
+}}
+/* Dividers */
+hr {{ border-color: rgba(16, 185, 129, 0.2) !important; margin: 2em 0px; }}
+/* Information boxes (Status, Success, Warnings) */
+.stAlert {{
+    background: rgba(31, 34, 39, 0.8) !important;
+    color: #FFF !important;
+    border-radius: 12px !important;
+}}
+button[kind="primary"] {{
+    background: linear-gradient(90deg, #10B981 0%, #6EE7B7 100%) !important;
+    color: #1a1a1a !important;
+    font-weight: bold !important;
+    border: none !important;
+}}
+button[kind="primary"]:hover {{
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.6) !important;
+    transform: scale(1.02);
+}}
+</style>
+""", unsafe_allow_html=True)
+
+cargar_estilos_premium()
 
 @st.cache_resource
 def init_supabase():
@@ -96,11 +236,15 @@ def get_index_seguro(lista, valor_buscado):
 # 🔐 LOGIN
 # ==========================================
 if not st.session_state.autenticado:
-    st.title("🔐 Acceso GR Consulting")
-    with st.form("login"):
-        c_in = st.text_input("Consultor").strip().upper()
-        p_in = st.text_input("Contraseña", type="password").strip()
-        if st.form_submit_button("INGRESAR"):
+    st.write("")
+    st.write("")
+    _, col_login, _ = st.columns([1, 1.5, 1])
+    with col_login:
+        st.markdown("<h2 style='text-align: center; color: #10B981;'>🔐 Acceso al Sistema</h2>", unsafe_allow_html=True)
+        with st.form("login"):
+            c_in = st.text_input("Consultor").strip().upper()
+            p_in = st.text_input("Contraseña", type="password").strip()
+            if st.form_submit_button("INGRESAR", use_container_width=True):
             df_u = obtener_config()
             if not df_u.empty and "CONSULTOR" in df_u.columns:
                 match = df_u[(df_u["CONSULTOR"] == c_in) & (df_u["PASSWORD"] == p_in)]
@@ -267,82 +411,85 @@ elif st.session_state.menu_activo == "📊 REPORTES":
         s_cli = f"_{f_cli[0]}" if len(f_cli) == 1 else ""; s_date = f"_{f_desde.strftime('%d%m%y')}_a_{f_hasta.strftime('%d%m%y')}"
         nom_base = f"{s_cli}{s_date}"
         
-        c1, c2 = st.columns(2)
-        with c1:
-            tipo_xls = st.radio("Excel:", ["Resumido", "Detallado"], horizontal=True); buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine='openpyxl') as w:
-                if "Resumido" in tipo_xls: res.to_excel(w, index=False)
-                else:
-                    df_det = df_f[["ID_TICKET", "FE_CONSULT", "CLIENTES", "MODULO", "CONSULTOR", "USUARIO", "TIEMPO_RES"]].copy()
-                    df_det["HORAS"] = (df_det["TIEMPO_RES"]/60).round(2); df_det["CONSULTAS"] = df_f["CONSULTAS"]; df_det["RESPUESTAS"] = df_f["RESPUESTAS"]
-                    df_det.to_excel(w, index=False)
-            st.download_button(f"📥 Excel", buf.getvalue(), f"GR_{tipo_xls}{nom_base}.xlsx")
-        with c2:
-            # --- MOTOR DE PDF REESTRUCTURADO ---
-            pdf_a = FPDF(); pdf_a.add_page(); pdf_a.set_font("Arial", 'B', 10)
-            
-            # Encabezado de Filtros
-            pdf_a.set_fill_color(240, 240, 240)
-            pdf_a.cell(0, 7, "FILTROS UTILIZADOS", 1, ln=True, align='C', fill=True)
-            pdf_a.set_font("Arial", '', 9)
-            pdf_a.cell(0, 6, f"Periodo: {f_desde.strftime('%d/%m/%Y')} al {f_hasta.strftime('%d/%m/%Y')}", 1, ln=True)
-            pdf_a.cell(0, 6, f"Clientes: {', '.join(f_cli) if f_cli else 'TODOS'}", 1, ln=True)
-            pdf_a.cell(0, 6, f"Consultores: {', '.join(f_con) if f_con else 'TODOS'}", 1, ln=True)
-            pdf_a.ln(5)
-            
-            pdf_a.set_font("Arial", 'B', 14); pdf_a.cell(0, 10, "Resumen Analítico", ln=True, align='C')
-            pdf_a.ln(2)
-
-            clientes_unicos = df_f["CLIENTES"].unique()
-
-            if len(clientes_unicos) > 1:
-                # CASO VARIOS CLIENTES
-                for cl in sorted(clientes_unicos):
-                    df_cl = df_f[df_f["CLIENTES"] == cl]
-                    sum_cl = df_cl["TIEMPO_RES"].sum() / 60
-                    pdf_a.set_font("Arial", 'B', 10)
-                    pdf_a.cell(115, 7, f"CLIENTE: {cl}", 1, 0, fill=True)
-                    pdf_a.cell(30, 7, f"{sum_cl:,.2f} hs", 1, ln=True, align='R', fill=True)
-                    
-                pdf_a.ln(5)
-                # Total por Consultor al final
-                pdf_a.set_font("Arial", 'B', 11); pdf_a.cell(0, 8, "TOTAL POR CONSULTOR", ln=True)
-                pdf_a.set_font("Arial", '', 10)
-                res_con = df_f.groupby("CONSULTOR")["TIEMPO_RES"].sum().reset_index()
-                for _, r in res_con.iterrows():
-                    pdf_a.cell(85, 7, str(r['CONSULTOR']), 1)
-                    pdf_a.cell(30, 7, f"{(r['TIEMPO_RES']/60):,.2f} hs", 1, ln=True, align='R')
-                
+        tipo_xls = st.radio("Excel:", ["Resumido", "Detallado"], horizontal=True); buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine='openpyxl') as w:
+            if "Resumido" in tipo_xls: res.to_excel(w, index=False)
             else:
-                # CASO UN SOLO CLIENTE
-                cl_name = clientes_unicos[0]
-                pdf_a.set_font("Arial", 'B', 12)
-                # Recuadro por cliente
-                pdf_a.rect(10, pdf_a.get_y(), 190, 12)
-                pdf_a.cell(0, 12, f"  CLIENTE: {cl_name}", ln=True)
-                pdf_a.ln(2)
-                
-                # Registro de cada módulo
+                df_det = df_f[["ID_TICKET", "FE_CONSULT", "CLIENTES", "MODULO", "CONSULTOR", "USUARIO", "TIEMPO_RES"]].copy()
+                df_det["HORAS"] = (df_det["TIEMPO_RES"]/60).round(2); df_det["CONSULTAS"] = df_f["CONSULTAS"]; df_det["RESPUESTAS"] = df_f["RESPUESTAS"]
+                df_det.to_excel(w, index=False)
+        
+        # --- MOTOR DE PDF REESTRUCTURADO ---
+        pdf_a = FPDF(); pdf_a.add_page(); pdf_a.set_font("Arial", 'B', 10)
+        
+        # Encabezado de Filtros
+        pdf_a.set_fill_color(240, 240, 240)
+        pdf_a.cell(0, 7, "FILTROS UTILIZADOS", 1, ln=True, align='C', fill=True)
+        pdf_a.set_font("Arial", '', 9)
+        pdf_a.cell(0, 6, f"Periodo: {f_desde.strftime('%d/%m/%Y')} al {f_hasta.strftime('%d/%m/%Y')}", 1, ln=True)
+        pdf_a.cell(0, 6, f"Clientes: {', '.join(f_cli) if f_cli else 'TODOS'}", 1, ln=True)
+        pdf_a.cell(0, 6, f"Consultores: {', '.join(f_con) if f_con else 'TODOS'}", 1, ln=True)
+        pdf_a.ln(5)
+        
+        pdf_a.set_font("Arial", 'B', 14); pdf_a.cell(0, 10, "Resumen Analítico", ln=True, align='C')
+        pdf_a.ln(2)
+
+        clientes_unicos = df_f["CLIENTES"].unique()
+
+        if len(clientes_unicos) > 1:
+            # CASO VARIOS CLIENTES
+            for cl in sorted(clientes_unicos):
+                df_cl = df_f[df_f["CLIENTES"] == cl]
+                sum_cl = df_cl["TIEMPO_RES"].sum() / 60
                 pdf_a.set_font("Arial", 'B', 10)
-                pdf_a.cell(100, 7, "MÓDULO", 1); pdf_a.cell(30, 7, "HORAS", 1, ln=True, align='C')
-                pdf_a.set_font("Arial", '', 10)
-                res_mod = df_f.groupby("MODULO")["TIEMPO_RES"].sum().reset_index()
-                for _, rm in res_mod.iterrows():
-                    pdf_a.cell(100, 7, str(rm['MODULO']), 1)
-                    pdf_a.cell(30, 7, f"{(rm['TIEMPO_RES']/60):,.2f}", 1, ln=True, align='R')
-
-            # TOTAL GENERAL FINAL (Para ambos casos)
+                pdf_a.cell(115, 7, f"CLIENTE: {cl}", 1, 0, fill=True)
+                pdf_a.cell(30, 7, f"{sum_cl:,.2f} hs", 1, ln=True, align='R', fill=True)
+                
             pdf_a.ln(5)
-            pdf_a.set_font("Arial", 'B', 11)
-            pdf_a.set_text_color(255, 0, 0)
-            pdf_a.cell(100, 10, "TOTAL GENERAL PROYECTO:", 1, 0, 'R')
-            pdf_a.cell(30, 10, f"{t_hs:,.2f} hs", 1, ln=True, align='C')
-            pdf_a.set_text_color(0, 0, 0)
+            # Total por Consultor al final
+            pdf_a.set_font("Arial", 'B', 11); pdf_a.cell(0, 8, "TOTAL POR CONSULTOR", ln=True)
+            pdf_a.set_font("Arial", '', 10)
+            res_con = df_f.groupby("CONSULTOR")["TIEMPO_RES"].sum().reset_index()
+            for _, r in res_con.iterrows():
+                pdf_a.cell(85, 7, str(r['CONSULTOR']), 1)
+                pdf_a.cell(30, 7, f"{(r['TIEMPO_RES']/60):,.2f} hs", 1, ln=True, align='R')
+            
+        else:
+            # CASO UN SOLO CLIENTE
+            cl_name = clientes_unicos[0]
+            pdf_a.set_font("Arial", 'B', 12)
+            # Recuadro por cliente
+            pdf_a.rect(10, pdf_a.get_y(), 190, 12)
+            pdf_a.cell(0, 12, f"  CLIENTE: {cl_name}", ln=True)
+            pdf_a.ln(2)
+            
+            # Registro de cada módulo
+            pdf_a.set_font("Arial", 'B', 10)
+            pdf_a.cell(100, 7, "MÓDULO", 1); pdf_a.cell(30, 7, "HORAS", 1, ln=True, align='C')
+            pdf_a.set_font("Arial", '', 10)
+            res_mod = df_f.groupby("MODULO")["TIEMPO_RES"].sum().reset_index()
+            for _, rm in res_mod.iterrows():
+                pdf_a.cell(100, 7, str(rm['MODULO']), 1)
+                pdf_a.cell(30, 7, f"{(rm['TIEMPO_RES']/60):,.2f}", 1, ln=True, align='R')
 
-            # Pie de página
-            pdf_a.ln(10); pdf_a.set_font("Arial", 'I', 8)
-            pdf_a.cell(0, 10, f"Generado el: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", 0, 0, 'C')
-            st.download_button("📥 PDF", pdf_a.output(dest='S').encode('latin-1', 'ignore'), f"Analitico_GR{nom_base}.pdf")
+        # TOTAL GENERAL FINAL (Para ambos casos)
+        pdf_a.ln(5)
+        pdf_a.set_font("Arial", 'B', 11)
+        pdf_a.set_text_color(255, 0, 0)
+        pdf_a.cell(100, 10, "TOTAL GENERAL PROYECTO:", 1, 0, 'R')
+        pdf_a.cell(30, 10, f"{t_hs:,.2f} hs", 1, ln=True, align='C')
+        pdf_a.set_text_color(0, 0, 0)
+
+        # Pie de página
+        pdf_a.ln(10); pdf_a.set_font("Arial", 'I', 8)
+        pdf_a.cell(0, 10, f"Generado el: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", 0, 0, 'C')
+        
+        st.divider()
+        st.markdown("#### 📥 Opciones de Exportación")
+        col_down, col_vacia = st.columns([1, 2])
+        with col_down:
+            st.download_button(f"📊 Exportar Excel", buf.getvalue(), f"GR_{tipo_xls}{nom_base}.xlsx", use_container_width=True)
+            st.download_button("📄 Exportar PDF", pdf_a.output(dest='S').encode('latin-1', 'ignore'), f"Analitico_GR{nom_base}.pdf", use_container_width=True)
 
 # (Resto de Dashboards, Consultar y Permisos se mantienen igual)
 elif st.session_state.menu_activo == "📈 DASHBOARDS":
