@@ -14,11 +14,12 @@ def cargar_estilos_premium():
     bg_encoded = ""
     import base64
     import os
-    import shutil
     
-    bg_path = "bg_premium.png"
+    bg_path = "/Users/juanluisgrandi/AI/Grandi_Consulting/bg_premium.png"
     src_path = "/Users/juanluisgrandi/.gemini/antigravity/brain/39e41a8b-2112-42bf-baef-bf02d569d5c1/office_option_2_1775696785781.png"
+    
     if not os.path.exists(bg_path) and os.path.exists(src_path):
+        import shutil
         try: shutil.copy(src_path, bg_path)
         except: pass
         
