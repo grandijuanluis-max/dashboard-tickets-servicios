@@ -621,6 +621,9 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
                     
                 res_prod["COLOR"] = res_prod["PCT_LOGRO"].apply(f_color)
                 
+                res_prod["MID_HORAS"] = res_prod["HORAS_REALES"] / 2
+                res_prod["OBJ_META_MD"] = res_prod["OBJ_META"].max() # Usar el maximo como meta global
+                
                 base = alt.Chart(res_prod).encode(
                     x=alt.X("GRUPO_FECHA:O", title="Periodo", sort=alt.SortField("FECHA_ORDEN", order="ascending")),
                     xOffset="CONSULTOR:N"
@@ -632,15 +635,22 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
                     tooltip=["CONSULTOR", "GRUPO_FECHA", "HORAS_REALES", "OBJ_META", "PCT_FORMAT"]
                 )
                 
-                ticks = base.mark_tick(
-                    color='black', 
-                    thickness=3, 
-                    size=40 
-                ).encode(
-                    y="OBJ_META:Q"
+                bars_text = base.mark_text(align='center', baseline='middle', angle=-90, color='#1E293B', fontWeight='bold', fontSize=11).encode(
+                    y=alt.Y("MID_HORAS:Q"),
+                    text="CONSULTOR:N"
                 )
                 
-                chart = alt.layer(bars, ticks).properties(
+                # Regla Global transversal
+                global_rule = alt.Chart(res_prod).mark_rule(color='#1E293B', strokeDash=[5,5], strokeWidth=2).encode(
+                    y="OBJ_META_MD:Q"
+                )
+                # Texto de leyenda "OBJETIVO"
+                rule_text = alt.Chart(res_prod).mark_text(align='left', dx=5, dy=-10, color='#1E293B', fontWeight='bold', fontSize=12).encode(
+                    y="OBJ_META_MD:Q",
+                    text=alt.value("OBJETIVO")
+                )
+                
+                chart = alt.layer(bars, bars_text, global_rule, rule_text).properties(
                     height=350
                 ).configure_view(
                     stroke="transparent"
