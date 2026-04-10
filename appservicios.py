@@ -314,7 +314,7 @@ if str(user_info.get("NUEVO", "NO")).strip().upper() == "SI": btns.append("➕ N
 if str(user_info.get("MODIFICAR", "NO")).strip().upper() == "SI": btns.append("✏️ MODIFICAR")
 if str(user_info.get("CONSULTAS", "NO")).strip().upper() == "SI": btns.append("🔍 CONSULTAR")
 if str(user_info.get("REPORTES", "NO")).strip().upper() == "SI": btns.append("📊 REPORTES")
-if str(user_info.get("DASHBOARD", "NO")).strip().upper() == "SI": btns.append("📈 DASHBOARDS")
+if str(user_info.get("DASHBOARDS", user_info.get("DASHBOARD", "NO"))).strip().upper() == "SI": btns.append("📈 DASHBOARDS")
 if str(user_info.get("PERMISOS", "NO")).strip().upper() == "SI" or es_admin: btns.append("⚙️ PERMISOS")
 
 if not btns:
