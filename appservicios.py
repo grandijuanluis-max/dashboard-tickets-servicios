@@ -285,7 +285,30 @@ if not st.session_state.autenticado:
     st.write("")
     _, col_login, _ = st.columns([1, 1.5, 1])
     with col_login:
-        st.markdown("<h2 style='text-align: center; color: #10B981;'>🔐 Acceso al Sistema</h2>", unsafe_allow_html=True)
+        hora_actual = datetime.now().hour
+        dia_mes = datetime.now().day
+        
+        frases_motiv = [
+            "Toda la energía para hoy", "A conquistar la jornada", "A dar el 100% hoy", 
+            "Vamos a romperla", "Con actitud positiva todo es posible", "Un paso más cerca del éxito",
+            "Hoy es un gran día para destacar", "La productividad al máximo", "Hagamos que las cosas pasen",
+            "A brillar en cada tarea", "La excelencia es nuestro hábito", "Conectados y listos para triunfar",
+            "Vamos por esos objetivos", "Innovando y resolviendo", "Energía positiva activada",
+            "Un nuevo día, nuevos logros", "A seguir sumando éxitos", "El esfuerzo de hoy suma mañana",
+            "Enfocados en la meta", "Dando lo mejor en cada detalle", "El éxito nos espera",
+            "Listos para un desempeño estelar", "Aportando valor desde el minuto uno", "Motivación al 1000%",
+            "Vamos a marcar la diferencia", "Liderando con resultados", "Cada ticket es una oportunidad",
+            "Optimizando y resolviendo a fondo", "Creciendo profesionalmente hoy", "Siempre en un nivel premium",
+            "Cierre espectacular de jornada"
+        ]
+        
+        frase_elegida = frases_motiv[(dia_mes - 1) % len(frases_motiv)]
+        
+        if 5 <= hora_actual < 12: base = "¡Buenos días! ☀️"
+        elif 12 <= hora_actual < 19: base = "¡Buenas tardes! 🚀"
+        else: base = "¡Buenas noches! 🌙"
+            
+        st.markdown(f"<h2 style='text-align: center; color: #10B981;'>{base} {frase_elegida}</h2>", unsafe_allow_html=True)
         with st.form("login"):
             c_in = st.text_input("Consultor").strip().upper()
             p_in = st.text_input("Contraseña", type="password").strip()
@@ -635,17 +658,17 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
                     tooltip=["CONSULTOR", "GRUPO_FECHA", "HORAS_REALES", "OBJ_META", "PCT_FORMAT"]
                 )
                 
-                bars_text = base.mark_text(align='center', baseline='middle', angle=-90, color='#1E293B', fontWeight='bold', fontSize=11).encode(
+                bars_text = base.mark_text(align='center', baseline='middle', angle=270, color='#1E293B', fontSize=10).encode(
                     y=alt.Y("MID_HORAS:Q"),
                     text="CONSULTOR:N"
                 )
                 
                 # Regla Global transversal
-                global_rule = alt.Chart(res_prod).mark_rule(color='#1E293B', strokeDash=[5,5], strokeWidth=2).encode(
+                global_rule = alt.Chart(res_prod).mark_rule(color='#1E293B', strokeDash=[5,5]).encode(
                     y="OBJ_META_MD:Q"
                 )
                 # Texto de leyenda "OBJETIVO"
-                rule_text = alt.Chart(res_prod).mark_text(align='left', dx=5, dy=-10, color='#1E293B', fontWeight='bold', fontSize=12).encode(
+                rule_text = alt.Chart(res_prod).mark_text(align='left', dx=5, dy=-10, color='#1E293B', fontSize=12).encode(
                     y="OBJ_META_MD:Q",
                     text=alt.value("OBJETIVO")
                 )
