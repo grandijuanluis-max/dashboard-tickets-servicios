@@ -588,17 +588,22 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
             df_prod = df_prod.dropna(subset=["FE_DT"])
             
             if not df_prod.empty:
+                meses_str = {1:"Ene", 2:"Feb", 3:"Mar", 4:"Abr", 5:"May", 6:"Jun", 7:"Jul", 8:"Ago", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dic"}
+                
                 if modo_prod == "Día":
-                    df_prod["GRUPO_FECHA"] = df_prod["FE_DT"].dt.strftime("%Y-%m-%d")
+                    df_prod["FECHA_ORDEN"] = df_prod["FE_DT"].dt.strftime("%Y-%m-%d")
+                    df_prod["GRUPO_FECHA"] = df_prod["FE_DT"].dt.strftime("%d/%m/%Y")
                     mult_obj = 1
                 elif modo_prod == "Semana":
-                    df_prod["GRUPO_FECHA"] = df_prod["FE_DT"].dt.strftime("%Y-W%W")
+                    df_prod["FECHA_ORDEN"] = df_prod["FE_DT"].dt.strftime("%Y-%W")
+                    df_prod["GRUPO_FECHA"] = "Sem " + df_prod["FE_DT"].dt.isocalendar().week.astype(str)
                     mult_obj = 5
                 elif modo_prod == "Mes":
-                    df_prod["GRUPO_FECHA"] = df_prod["FE_DT"].dt.strftime("%Y-%m")
+                    df_prod["FECHA_ORDEN"] = df_prod["FE_DT"].dt.strftime("%Y-%m")
+                    df_prod["GRUPO_FECHA"] = df_prod["FE_DT"].dt.month.map(meses_str) + " " + df_prod["FE_DT"].dt.year.astype(str)
                     mult_obj = 20
                     
-                res_prod = df_prod.groupby(["GRUPO_FECHA", "CONSULTOR"]).agg(
+                res_prod = df_prod.groupby(["FECHA_ORDEN", "GRUPO_FECHA", "CONSULTOR"]).agg(
                     HORAS_REALES=("TIEMPO_RES", lambda x: x.sum() / 60),
                     OBJ_DIARIO_MAX=("OBJ_DIARIO_NUM", "max")
                 ).reset_index()
@@ -616,15 +621,32 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
                     
                 res_prod["COLOR"] = res_prod["PCT_LOGRO"].apply(f_color)
                 
-                chart = alt.Chart(res_prod).mark_bar(opacity=0.9).encode(
-                    x=alt.X("GRUPO_FECHA:O", title="Periodo", axis=alt.Axis(labelAngle=-45)),
-                    y=alt.Y("HORAS_REALES:Q", title="Horas Trabajadas"),
-                    color=alt.Color("COLOR:N", scale=None), 
-                    column=alt.Column("CONSULTOR:N", title="Panel de Consultores"),
-                    tooltip=["CONSULTOR", "GRUPO_FECHA", "HORAS_REALES", "OBJ_META", "PCT_FORMAT"]
-                ).properties(width=160, height=300).configure_view(stroke="transparent")
+                base = alt.Chart(res_prod).encode(
+                    x=alt.X("GRUPO_FECHA:O", title="Periodo", sort=alt.SortField("FECHA_ORDEN", order="ascending")),
+                    xOffset="CONSULTOR:N"
+                )
                 
-                st.altair_chart(chart, use_container_width=False)
+                bars = base.mark_bar(opacity=0.9).encode(
+                    y=alt.Y("HORAS_REALES:Q", title="Horas Trabajadas"),
+                    color=alt.Color("COLOR:N", scale=None, legend=None),
+                    tooltip=["CONSULTOR", "GRUPO_FECHA", "HORAS_REALES", "OBJ_META", "PCT_FORMAT"]
+                )
+                
+                ticks = base.mark_tick(
+                    color='black', 
+                    thickness=3, 
+                    size=40 
+                ).encode(
+                    y="OBJ_META:Q"
+                )
+                
+                chart = alt.layer(bars, ticks).properties(
+                    height=350
+                ).configure_view(
+                    stroke="transparent"
+                )
+                
+                st.altair_chart(chart, use_container_width=True)
 
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
     if not df_f.empty:
