@@ -11,6 +11,65 @@ import os
 st.set_page_config(page_title="GR Consulting - Gestión Integral BI", layout="wide", page_icon="📈")
 
 def cargar_estilos_claros():
+    import base64, os
+    bg_encoded = ""
+    # Ruta estática relativa para garantizar que funcione en Streamlit Cloud
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    bg_path = os.path.join(base_dir, "bg_premium.png")
+    
+    if os.path.exists(bg_path):
+        try:
+            with open(bg_path, "rb") as f:
+                bg_encoded = base64.b64encode(f.read()).decode()
+        except: pass
+
+    if bg_encoded:
+        st.markdown(f'''
+        <style>
+        /* Desacoplar el contenedor nativo de streamlit para que deje ver el HTML debajo */
+        .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{
+            background: transparent !important;
+        }}
+        .fixed-bg {{
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background-image: url('data:image/png;base64,{bg_encoded}');
+            background-size: cover;
+            background-position: center;
+            z-index: -999;
+        }}
+        .bg-overlay {{
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(255, 255, 255, 0.2);
+            z-index: -998;
+            pointer-events: none;
+        }}
+        .block-container {{
+            position: relative;
+            z-index: 1;
+        }}
+        </style>
+        <div class="fixed-bg"></div>
+        <div class="bg-overlay"></div>
+        ''', unsafe_allow_html=True)
+    else:
+        # Fallback si no está la imagen
+        st.markdown('''
+        <style>
+        .stApp, [data-testid="stAppViewContainer"] {
+            background-color: #F8FAFC !important;
+            background-image: radial-gradient(#CBD5E1 1px, transparent 1px) !important;
+            background-size: 20px 20px !important;
+        }
+        .block-container {
+            position: relative;
+            z-index: 1;
+        }
+        </style>
+        ''', unsafe_allow_html=True)
+
+
     st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Outfit:wght@400;700&display=swap');
@@ -23,41 +82,36 @@ h1, h2, h3, h4, h5, h6 {
     font-family: 'Outfit', sans-serif !important;
     color: #0F172A !important;
 }
-/* Fondo Claro */
-.stApp {
-    background-color: #F8FAFC !important;
-    background-image: radial-gradient(#CBD5E1 1px, transparent 1px) !important;
-    background-size: 20px 20px !important;
-}
+
 .block-container {
     padding-top: 2rem !important;
 }
 p, span, div, label {
     color: #334155 !important;
 }
-/* Botones de Navegación */
+/* Botones de Navegación Transmisión Glassmorphism */
 .stButton > button, .stDownloadButton > button {
-    background: #FFFFFF !important;
-    border: 1px solid #94A3B8 !important;
+    background: rgba(255, 255, 255, 0.7) !important;
+    backdrop-filter: blur(10px) !important;
+    border: 1px solid rgba(148, 163, 184, 0.4) !important;
     border-radius: 8px !important;
     color: #0284C7 !important; /* Celeste Encendido */
     font-weight: 600 !important;
     transition: all 0.2s ease !important;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05) !important;
 }
 .stButton > button:hover, .stDownloadButton > button:hover {
-    background: #E0F2FE !important; /* Fondo celeste suave al mouse */
+    background: rgba(224, 242, 254, 0.9) !important; 
     border-color: #0284C7 !important;
     color: #0369A1 !important; /* Azul más fuerte */
-    box-shadow: 0 4px 6px -1px rgba(2, 132, 199, 0.1) !important;
 }
-/* Formularios */
+/* Formularios Claros Semitransparentes */
 .stTextInput > div > div > input, 
 .stSelectbox > div > div > div, 
 .stNumberInput > div > div > input, 
 .stDateInput > div > div > input,
 .stTextArea > div > div > textarea {
-    background: #FFFFFF !important;
+    background: rgba(255, 255, 255, 0.85) !important;
     border: 1px solid #CBD5E1 !important;
     color: #0F172A !important;
     border-radius: 6px !important;
@@ -69,23 +123,24 @@ p, span, div, label {
     box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.2) !important;
 }
 .stTextInput label, .stSelectbox label, .stNumberInput label, .stDateInput label, .stTextArea label {
-    color: #475569 !important; /* Gris Verdoso */
+    color: #1E293B !important; 
     font-weight: 600 !important;
 }
-/* Métricas Totales */
+/* Métricas Totales transparentes */
 [data-testid="stMetric"] {
-    background: #FFFFFF !important;
-    border: 1px solid #E2E8F0 !important;
-    border-left: 4px solid #0284C7 !important; /* Linea lateral celeste */
-    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.85) !important;
+    backdrop-filter: blur(10px) !important;
+    border: 1px solid rgba(226, 232, 240, 0.8) !important;
+    border-left: 5px solid #0284C7 !important; /* Linea lateral celeste */
+    border-radius: 12px;
     padding: 15px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    box-shadow: 0 4px 15px rgba(0,0,0,0.05);
 }
 [data-testid="stMetricValue"] { color: #0F172A !important; font-family: 'Outfit', sans-serif; }
-[data-testid="stMetricLabel"] { color: #64748B !important; font-weight: bold; }
-/* Dataframes / Tablas */
+[data-testid="stMetricLabel"] { color: #64748B !important; font-weight: bold; text-transform: uppercase; }
+/* Dataframes / Tablas translucidas */
 [data-testid="stDataFrame"] {
-    background: #FFFFFF !important;
+    background: rgba(255, 255, 255, 0.9) !important;
     border-radius: 8px !important;
     border: 1px solid #E2E8F0 !important;
 }
@@ -98,29 +153,32 @@ p, span, div, label {
 }
 /* Sidebar */
 [data-testid="stSidebar"] {
-    background: #FFFFFF;
+    background: rgba(255, 255, 255, 0.9) !important;
+    backdrop-filter: blur(15px);
     border-right: 1px solid #E2E8F0;
 }
 /* Separadores */
-hr { border-color: #E2E8F0 !important; margin: 2em 0px; }
+hr { border-color: rgba(226, 232, 240, 0.5) !important; margin: 2em 0px; }
 /* Caja Info */
 .stAlert {
-    background: #F1F5F9 !important;
+    background: rgba(241, 245, 249, 0.85) !important;
     color: #1E293B !important;
     border-radius: 8px !important;
 }
-/* Botones Principales -> NARANJA */
+/* Botones Principales -> NARANJA VIBRANTE */
 button[kind="primary"] {
-    background: #F97316 !important; /* Naranja espectacular */
+    background: #F97316 !important; 
     color: #FFFFFF !important;
     font-weight: bold !important;
     border: none !important;
     border-radius: 8px !important;
-    box-shadow: 0 4px 6px -1px rgba(249, 115, 22, 0.2) !important;
+    box-shadow: 0 4px 15px rgba(249, 115, 22, 0.4) !important;
+    transition: all 0.3s ease !important;
 }
 button[kind="primary"]:hover {
     background: #EA580C !important;
-    transform: translateY(-1px);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(249, 115, 22, 0.6) !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -239,9 +297,22 @@ user_info = user_match.iloc[0] if not user_match.empty else {"ROL": "USER"}
 es_admin = str(user_info.get("ROL")).upper() == "ADMIN"
 
 # ==========================================
+# 🗺 NAVEGACIÓN SUPERIOR
+# ==========================================
+btns = ["➕ NUEVO", "✏️ MODIFICAR", "🔍 CONSULTAR", "📊 REPORTES", "📈 DASHBOARDS"]
+if es_admin: btns.append("⚙️ PERMISOS")
+
+cols_menu = st.columns(len(btns))
+for i, b in enumerate(btns):
+    # Usamos on_click nativo o chequeo en cascada
+    if cols_menu[i].button(b, use_container_width=True): 
+        st.session_state.menu_activo = b
+
+st.divider()
+
+# ==========================================
 # 🎯 SIDEBAR (FILTROS)
 # ==========================================
-periodo_sel = "Personalizado"
 with st.sidebar:
     st.success(f"👤 **{nombre_consultor}**")
     if st.button("🚪 Cerrar Sesión"): 
@@ -252,15 +323,19 @@ with st.sidebar:
     if st.session_state.menu_activo in ["📊 REPORTES", "📈 DASHBOARDS", "🔍 CONSULTAR"]:
         st.header("📅 Rango y Periodos")
         hoy_dt = date.today()
-        periodo_sel = st.selectbox("Accesos Rápidos:", ["Personalizado", "Hoy", "Ayer", "Mes Actual", "Mes Anterior"])
+        # "Mes Actual" ahora es el primero en la lista (Default)
+        periodo_sel = st.selectbox("Accesos Rápidos:", ["Mes Actual", "Hoy", "Ayer", "Mes Anterior", "Personalizado"])
+        
         if periodo_sel == "Hoy": st.session_state.f_desde = st.session_state.f_hasta = hoy_dt
         elif periodo_sel == "Ayer": st.session_state.f_desde = st.session_state.f_hasta = hoy_dt - timedelta(days=1)
         elif periodo_sel == "Mes Actual": st.session_state.f_desde, st.session_state.f_hasta = hoy_dt.replace(day=1), hoy_dt
         elif periodo_sel == "Mes Anterior":
             ult = hoy_dt.replace(day=1) - timedelta(days=1)
             st.session_state.f_desde, st.session_state.f_hasta = ult.replace(day=1), ult
+            
         f_desde = st.date_input("Desde:", value=st.session_state.f_desde, format="DD/MM/YYYY")
         f_hasta = st.date_input("Hasta:", value=st.session_state.f_hasta, format="DD/MM/YYYY")
+        
         st.session_state.f_desde, st.session_state.f_hasta = f_desde, f_hasta
     else: f_desde, f_hasta = date(2000, 1, 1), date(2100, 1, 1)
 
@@ -284,14 +359,6 @@ if f_con: df_f = df_f[df_f["CONSULTOR"].isin(f_con)]
 if f_mod: df_f = df_f[df_f["MODULO"].isin(f_mod)]
 if f_ani: df_f = df_f[df_f["ANIO"].isin(f_ani)]
 if f_mes: df_f = df_f[df_f["MES"].isin(f_mes)]
-
-# Navegación
-btns = ["➕ NUEVO", "✏️ MODIFICAR", "🔍 CONSULTAR", "📊 REPORTES", "📈 DASHBOARDS"]
-if es_admin: btns.append("⚙️ PERMISOS")
-cols_menu = st.columns(len(btns))
-for i, b in enumerate(btns):
-    if cols_menu[i].button(b, use_container_width=True): st.session_state.menu_activo = b
-st.divider()
 
 # Listas de opciones estándar para Formularios
 OPC_TIPO = ["FUNCIONAL", "TÉCNICA", "COMERCIAL"]
@@ -381,7 +448,7 @@ elif st.session_state.menu_activo == "📊 REPORTES":
         st.metric("Horas Totales", f"{t_hs:,.2f} hs")
         res = df_f.groupby(["CLIENTES", "MODULO", "CONSULTOR"])["TIEMPO_RES"].sum().reset_index()
         res["HORAS"] = (res["TIEMPO_RES"]/60).round(2)
-        st.dataframe(res, use_container_width=True, hide_index=True)
+        st.dataframe(res.drop(columns=["TIEMPO_RES"]), use_container_width=True, hide_index=True)
         
         s_cli = f"_{f_cli[0]}" if len(f_cli) == 1 else ""; s_date = f"_{f_desde.strftime('%d%m%y')}_a_{f_hasta.strftime('%d%m%y')}"
         nom_base = f"{s_cli}{s_date}"
