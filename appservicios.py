@@ -36,12 +36,13 @@ def cargar_estilos_claros():
             background-image: url('data:image/png;base64,{bg_encoded}');
             background-size: cover;
             background-position: center;
+            opacity: 0.55; /* Fondo más fuerte a pedido del usuario */
             z-index: -999;
         }}
         .bg-overlay {{
             position: fixed;
             top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.1); 
             z-index: -998;
             pointer-events: none;
         }}
@@ -91,9 +92,9 @@ p, span, div, label {
 }
 /* Botones de Navegación Transmisión Glassmorphism */
 .stButton > button, .stDownloadButton > button {
-    background: rgba(255, 255, 255, 0.7) !important;
+    background: rgba(255, 255, 255, 0.15) !important;
     backdrop-filter: blur(10px) !important;
-    border: 1px solid rgba(148, 163, 184, 0.4) !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
     border-radius: 8px !important;
     color: #0284C7 !important; /* Celeste Encendido */
     font-weight: 600 !important;
@@ -101,7 +102,7 @@ p, span, div, label {
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05) !important;
 }
 .stButton > button:hover, .stDownloadButton > button:hover {
-    background: rgba(224, 242, 254, 0.9) !important; 
+    background: rgba(255, 255, 255, 0.3) !important; 
     border-color: #0284C7 !important;
     color: #0369A1 !important; /* Azul más fuerte */
 }
@@ -111,8 +112,9 @@ p, span, div, label {
 .stNumberInput > div > div > input, 
 .stDateInput > div > div > input,
 .stTextArea > div > div > textarea {
-    background: rgba(255, 255, 255, 0.85) !important;
-    border: 1px solid #CBD5E1 !important;
+    background: rgba(255, 255, 255, 0.15) !important;
+    backdrop-filter: blur(10px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
     color: #0F172A !important;
     border-radius: 6px !important;
 }
@@ -128,9 +130,9 @@ p, span, div, label {
 }
 /* Métricas Totales transparentes */
 [data-testid="stMetric"] {
-    background: rgba(255, 255, 255, 0.85) !important;
+    background: rgba(255, 255, 255, 0.15) !important;
     backdrop-filter: blur(10px) !important;
-    border: 1px solid rgba(226, 232, 240, 0.8) !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
     border-left: 5px solid #0284C7 !important; /* Linea lateral celeste */
     border-radius: 12px;
     padding: 15px;
@@ -140,9 +142,14 @@ p, span, div, label {
 [data-testid="stMetricLabel"] { color: #64748B !important; font-weight: bold; text-transform: uppercase; }
 /* Dataframes / Tablas translucidas */
 [data-testid="stDataFrame"] {
-    background: rgba(255, 255, 255, 0.9) !important;
+    background: rgba(255, 255, 255, 0.15) !important;
+    backdrop-filter: blur(10px) !important;
     border-radius: 8px !important;
-    border: 1px solid #E2E8F0 !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
+}
+/* Esto ayuda a trasparentar la grilla interna si Streamlit lo permite */
+[data-testid="stDataFrame"] > div {
+    background: transparent !important;
 }
 /* Desplegables oscuros sobre claro */
 [data-baseweb="popover"] div, 
@@ -153,17 +160,19 @@ p, span, div, label {
 }
 /* Sidebar */
 [data-testid="stSidebar"] {
-    background: rgba(255, 255, 255, 0.9) !important;
+    background: rgba(255, 255, 255, 0.15) !important;
     backdrop-filter: blur(15px);
-    border-right: 1px solid #E2E8F0;
+    border-right: 1px solid rgba(255, 255, 255, 0.3);
 }
 /* Separadores */
-hr { border-color: rgba(226, 232, 240, 0.5) !important; margin: 2em 0px; }
+hr { border-color: rgba(255, 255, 255, 0.3) !important; margin: 2em 0px; }
 /* Caja Info */
 .stAlert {
-    background: rgba(241, 245, 249, 0.85) !important;
+    background: rgba(255, 255, 255, 0.15) !important;
+    backdrop-filter: blur(10px) !important;
     color: #1E293B !important;
     border-radius: 8px !important;
+    border: 1px solid rgba(255, 255, 255, 0.3) !important;
 }
 /* Botones Principales -> NARANJA VIBRANTE */
 button[kind="primary"] {
@@ -299,8 +308,23 @@ es_admin = str(user_info.get("ROL")).upper() == "ADMIN"
 # ==========================================
 # 🗺 NAVEGACIÓN SUPERIOR
 # ==========================================
-btns = ["➕ NUEVO", "✏️ MODIFICAR", "🔍 CONSULTAR", "📊 REPORTES", "📈 DASHBOARDS"]
-if es_admin: btns.append("⚙️ PERMISOS")
+btns = []
+if str(user_info.get("NUEVO", "NO")).strip().upper() == "SI": btns.append("➕ NUEVO")
+if str(user_info.get("MODIFICAR", "NO")).strip().upper() == "SI": btns.append("✏️ MODIFICAR")
+if str(user_info.get("CONSULTAS", "NO")).strip().upper() == "SI": btns.append("🔍 CONSULTAR")
+if str(user_info.get("REPORTES", "NO")).strip().upper() == "SI": btns.append("📊 REPORTES")
+if str(user_info.get("DASHBOARD", "NO")).strip().upper() == "SI": btns.append("📈 DASHBOARDS")
+if str(user_info.get("PERMISOS", "NO")).strip().upper() == "SI" or es_admin: btns.append("⚙️ PERMISOS")
+
+if not btns:
+    st.warning("Usuario sin permisos en ningún módulo.")
+    if st.button("🚪 Cerrar Sesión", use_container_width=True):
+        st.session_state.autenticado = False
+        st.rerun()
+    st.stop()
+
+if st.session_state.menu_activo not in btns:
+    st.session_state.menu_activo = btns[0]
 
 cols_menu = st.columns(len(btns))
 for i, b in enumerate(btns):
