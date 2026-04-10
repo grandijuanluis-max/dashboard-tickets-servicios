@@ -1,4 +1,5 @@
 import streamlit as st
+import altair as alt
 from supabase import create_client, Client
 import pandas as pd
 from datetime import datetime, date, timedelta
@@ -560,8 +561,11 @@ elif st.session_state.menu_activo == "📊 REPORTES":
 # (Resto de Dashboards, Consultar y Permisos se mantienen igual)
 elif st.session_state.menu_activo == "📈 DASHBOARDS":
     if not df_f.empty:
-        df_dash = pd.merge(df_f, df_config[["CONSULTOR", "VALOR_HORA"]], on="CONSULTOR", how="left").fillna(0)
-        tab1, tab2, tab3 = st.tabs(["📋 Operativo", "⚡ Performance", "💰 Financiero"])
+        cols_traer = ["CONSULTOR", "VALOR_HORA"]
+        if "OBJ_DIARIO" in df_config.columns: cols_traer.append("OBJ_DIARIO")
+        
+        df_dash = pd.merge(df_f, df_config[cols_traer], on="CONSULTOR", how="left").fillna(0)
+        tab1, tab2, tab3, tab4 = st.tabs(["📋 Operativo", "⚡ Performance", "💰 Financiero", "🏆 Productividad"])
         with tab1: st.bar_chart(df_dash.groupby("MODULO")["TIEMPO_RES"].sum())
         with tab2:
             df_p = df_dash.groupby(["FE_DT", "CONSULTOR"]).agg({"TIEMPO_RES":"sum"}).reset_index()
@@ -569,6 +573,58 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
         with tab3:
             df_dash["COSTO"] = (df_dash["TIEMPO_RES"]/60) * pd.to_numeric(df_dash["VALOR_HORA"], errors='coerce').fillna(0)
             st.metric("Inversión Total", f"$ {df_dash['COSTO'].sum():,.2f}")
+        with tab4:
+            st.markdown("### 🏆 Productividad por Consultor")
+            modo_prod = st.radio("Agrupar Rendimiento por:", ["Día", "Semana", "Mes"], horizontal=True)
+            
+            # Objetivo logico
+            if "OBJ_DIARIO" in df_dash.columns:
+                df_dash["OBJ_DIARIO_NUM"] = pd.to_numeric(df_dash["OBJ_DIARIO"], errors='coerce').fillna(8.0)
+            else:
+                df_dash["OBJ_DIARIO_NUM"] = 8.0 # default
+                
+            df_prod = df_dash.copy()
+            df_prod["FE_DT"] = pd.to_datetime(df_prod["FE_DT"], errors="coerce")
+            df_prod = df_prod.dropna(subset=["FE_DT"])
+            
+            if not df_prod.empty:
+                if modo_prod == "Día":
+                    df_prod["GRUPO_FECHA"] = df_prod["FE_DT"].dt.strftime("%Y-%m-%d")
+                    mult_obj = 1
+                elif modo_prod == "Semana":
+                    df_prod["GRUPO_FECHA"] = df_prod["FE_DT"].dt.strftime("%Y-W%W")
+                    mult_obj = 5
+                elif modo_prod == "Mes":
+                    df_prod["GRUPO_FECHA"] = df_prod["FE_DT"].dt.strftime("%Y-%m")
+                    mult_obj = 20
+                    
+                res_prod = df_prod.groupby(["GRUPO_FECHA", "CONSULTOR"]).agg(
+                    HORAS_REALES=("TIEMPO_RES", lambda x: x.sum() / 60),
+                    OBJ_DIARIO_MAX=("OBJ_DIARIO_NUM", "max")
+                ).reset_index()
+                
+                res_prod["OBJ_META"] = res_prod["OBJ_DIARIO_MAX"] * mult_obj
+                res_prod["PCT_LOGRO"] = (res_prod["HORAS_REALES"] / res_prod["OBJ_META"].replace(0, 1)) * 100
+                res_prod["PCT_FORMAT"] = res_prod["PCT_LOGRO"].round(1).astype(str) + "%"
+                res_prod["HORAS_REALES"] = res_prod["HORAS_REALES"].round(2)
+                
+                def f_color(pct):
+                    if pct < 50: return "#EF4444"
+                    elif pct <= 99: return "#F59E0B"
+                    elif pct <= 105: return "#10B981"
+                    else: return "#F97316"
+                    
+                res_prod["COLOR"] = res_prod["PCT_LOGRO"].apply(f_color)
+                
+                chart = alt.Chart(res_prod).mark_bar(opacity=0.9).encode(
+                    x=alt.X("GRUPO_FECHA:O", title="Periodo", axis=alt.Axis(labelAngle=-45)),
+                    y=alt.Y("HORAS_REALES:Q", title="Horas Trabajadas"),
+                    color=alt.Color("COLOR:N", scale=None), 
+                    column=alt.Column("CONSULTOR:N", title="Panel de Consultores"),
+                    tooltip=["CONSULTOR", "GRUPO_FECHA", "HORAS_REALES", "OBJ_META", "PCT_FORMAT"]
+                ).properties(width=160, height=300).configure_view(stroke="transparent")
+                
+                st.altair_chart(chart, use_container_width=False)
 
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
     if not df_f.empty:
