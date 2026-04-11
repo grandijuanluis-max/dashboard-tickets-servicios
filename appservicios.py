@@ -382,7 +382,7 @@ with st.sidebar:
         st.header("📅 Rango y Periodos")
         hoy_dt = date.today()
         # "Mes Actual" ahora es el primero en la lista (Default)
-        periodo_sel = st.selectbox("Accesos Rápidos:", ["Mes Actual", "Hoy", "Ayer", "Mes Anterior", "Personalizado"])
+        periodo_sel = st.selectbox("Accesos Rápidos:", ["Mes Actual", "Hoy", "Ayer", "Mes Anterior", "Año Actual", "Año Anterior", "Personalizado"])
         
         if periodo_sel == "Hoy": st.session_state.f_desde = st.session_state.f_hasta = hoy_dt
         elif periodo_sel == "Ayer": st.session_state.f_desde = st.session_state.f_hasta = hoy_dt - timedelta(days=1)
@@ -390,6 +390,10 @@ with st.sidebar:
         elif periodo_sel == "Mes Anterior":
             ult = hoy_dt.replace(day=1) - timedelta(days=1)
             st.session_state.f_desde, st.session_state.f_hasta = ult.replace(day=1), ult
+        elif periodo_sel == "Año Actual":
+            st.session_state.f_desde, st.session_state.f_hasta = date(hoy_dt.year, 1, 1), hoy_dt
+        elif periodo_sel == "Año Anterior":
+            st.session_state.f_desde, st.session_state.f_hasta = date(hoy_dt.year - 1, 1, 1), date(hoy_dt.year - 1, 12, 31)
             
         f_desde = st.date_input("Desde:", value=st.session_state.f_desde, format="DD/MM/YYYY")
         f_hasta = st.date_input("Hasta:", value=st.session_state.f_hasta, format="DD/MM/YYYY")
