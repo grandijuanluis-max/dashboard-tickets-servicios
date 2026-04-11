@@ -742,9 +742,19 @@ elif st.session_state.menu_activo == "⚙️ PERMISOS" and es_admin:
     if st.button("💾 Guardar", use_container_width=True):
         if supabase:
             exito = True
+            map_cols = {
+                "CONSULTOR": "consultor", "PASSWORD": "password", "ROL": "rol", "VALOR_HORA": "valor_hora",
+                "NUEVO": "Nuevo", "MODIFICAR": "modificar", "CONSULTAS": "consultas", "REPORTES": "reportes",
+                "DASHBOARDS": "dashboards", "PERMISOS": "permisos", "OBJ_DIARIO": "OBJ_DIARIO"
+            }
+            
             for _, row in df_ed.iterrows():
                 try:
-                    row_dict = {str(k).lower(): v for k, v in row.to_dict().items()}
+                    row_dict = {}
+                    for k, v in row.items():
+                        k_upper = str(k).strip().upper()
+                        # Si no está en el mapa, probamos en minúscula por default
+                        row_dict[map_cols.get(k_upper, k_upper.lower())] = v
                     
                     # Asegurar la limpieza e integridad de la clave primaria
                     if "consultor" not in row_dict or not str(row_dict["consultor"]).strip():
@@ -755,12 +765,17 @@ elif st.session_state.menu_activo == "⚙️ PERMISOS" and es_admin:
                         try: row_dict["valor_hora"] = float(row_dict["valor_hora"])
                         except: row_dict["valor_hora"] = 0.0
                     else:
-                        row_dict["valor_hora"] = 0.0 # Valor por default si el campo fue borrado
+                        row_dict["valor_hora"] = 0.0 # Valor por default
                         
-                    if "obj_diario" in row_dict:
-                        try: row_dict["obj_diario"] = float(row_dict["obj_diario"])
-                        except: row_dict["obj_diario"] = 8.0 # Default a 8 hs
+                    if "OBJ_DIARIO" in row_dict:
+                        try: row_dict["OBJ_DIARIO"] = float(row_dict["OBJ_DIARIO"])
+                        except: row_dict["OBJ_DIARIO"] = 8.0 # Default a 8 hs
                         
+                    # Fix para campos de texto limpios (strip)
+                    for k_text in ["Nuevo", "modificar", "consultas", "reportes", "dashboards", "permisos"]:
+                        if k_text in row_dict and isinstance(row_dict[k_text], str):
+                            row_dict[k_text] = row_dict[k_text].strip().lower()
+
                     response = supabase.table("config_consultores").upsert(row_dict).execute()
                 except Exception as e:
                     exito = False
