@@ -588,15 +588,11 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
         if "OBJ_DIARIO" in df_config.columns: cols_traer.append("OBJ_DIARIO")
         
         df_dash = pd.merge(df_f, df_config[cols_traer], on="CONSULTOR", how="left").fillna(0)
-        tab1, tab2, tab3, tab4 = st.tabs(["📋 Operativo", "⚡ Performance", "💰 Financiero", "🏆 Productividad"])
-        with tab1: st.bar_chart(df_dash.groupby("MODULO")["TIEMPO_RES"].sum())
-        with tab2:
-            df_p = df_dash.groupby(["FE_DT", "CONSULTOR"]).agg({"TIEMPO_RES":"sum"}).reset_index()
-            st.line_chart(df_p.set_index("FE_DT")["TIEMPO_RES"])
-        with tab3:
-            df_dash["COSTO"] = (df_dash["TIEMPO_RES"]/60) * pd.to_numeric(df_dash["VALOR_HORA"], errors='coerce').fillna(0)
-            st.metric("Inversión Total", f"$ {df_dash['COSTO'].sum():,.2f}")
-        with tab4:
+        df_dash["HORAS"] = df_dash["TIEMPO_RES"] / 60
+        
+        tab1, tab2, tab3, tab4 = st.tabs(["🏆 Productividad", "👥 Consumo Clientes", "🧩 Consumo Modulos", "💰 Financiero"])
+        
+        with tab1:
             st.markdown("### 🏆 Productividad por Consultor")
             modo_prod = st.radio("Agrupar Rendimiento por:", ["Día", "Semana", "Mes"], horizontal=True)
             
@@ -680,6 +676,44 @@ elif st.session_state.menu_activo == "📈 DASHBOARDS":
                 )
                 
                 st.altair_chart(chart, use_container_width=True)
+
+        with tab2:
+            st.markdown("### 👥 Consumo por Cliente")
+            t_horas_cli = df_dash["HORAS"].sum()
+            st.metric("Total Horas Consumidas", f"{t_horas_cli:,.2f} hs")
+            
+            df_clientes = df_dash.groupby("CLIENTES")["HORAS"].sum().reset_index()
+            chart_cli = alt.Chart(df_clientes).mark_bar(color="#0284C7").encode(
+                x=alt.X("CLIENTES:N", sort="-y", title="Cliente"),
+                y=alt.Y("HORAS:Q", title="Horas Consumidas"),
+                tooltip=["CLIENTES", alt.Tooltip("HORAS:Q", format=".2f", title="Horas")]
+            ).properties(height=350)
+            st.altair_chart(chart_cli, use_container_width=True)
+
+        with tab3:
+            st.markdown("### 🧩 Consumo por Módulos")
+            st.markdown("#### Horas por Módulo")
+            df_modulos = df_dash.groupby("MODULO")["HORAS"].sum().reset_index()
+            chart_mod = alt.Chart(df_modulos).mark_bar(color="#10B981").encode(
+                x=alt.X("MODULO:N", sort="-y", title="Módulo"),
+                y=alt.Y("HORAS:Q", title="Horas Consumidas"),
+                tooltip=["MODULO", alt.Tooltip("HORAS:Q", format=".2f", title="Horas")]
+            ).properties(height=300)
+            st.altair_chart(chart_mod, use_container_width=True)
+            
+            st.markdown("#### Horas por Módulo y Cliente")
+            chart_mod_cli = alt.Chart(df_dash).mark_bar().encode(
+                x=alt.X("sum(HORAS):Q", title="Horas Consumidas"),
+                y=alt.Y("MODULO:N", title="Módulo", sort='-x'),
+                color=alt.Color("CLIENTES:N", title="Cliente", scale=alt.Scale(scheme='category20')),
+                tooltip=["MODULO", "CLIENTES", alt.Tooltip("sum(HORAS):Q", format=".2f", title="Horas")]
+            ).properties(height=400)
+            st.altair_chart(chart_mod_cli, use_container_width=True)
+
+        with tab4:
+            st.markdown("### 💰 Resumen Financiero")
+            df_dash["COSTO"] = df_dash["HORAS"] * pd.to_numeric(df_dash["VALOR_HORA"], errors='coerce').fillna(0)
+            st.metric("Inversión Total", f"$ {df_dash['COSTO'].sum():,.2f}")
 
 elif st.session_state.menu_activo == "🔍 CONSULTAR":
     if not df_f.empty:
