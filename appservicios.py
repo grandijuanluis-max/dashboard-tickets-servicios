@@ -221,8 +221,18 @@ def obtener_config():
         if not response.data: return pd.DataFrame()
         df = pd.DataFrame(response.data)
         df.columns = [str(c).strip().upper() for c in df.columns]
+        
+        # Preservar el tipo numérico para las columnas financieras y de objetivos
+        cols_numericas = ["VALOR_HORA", "OBJ_DIARIO"]
+        for col in cols_numericas:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+                
+        # Mantener el texto limpio y en mayúsculas para el resto
         for col in df.columns:
-            df[col] = df[col].astype(str).str.strip().str.upper().str.replace(r"\.0$", "", regex=True)
+            if col not in cols_numericas:
+                df[col] = df[col].astype(str).str.strip().str.upper().str.replace(r"\.0$", "", regex=True)
+                
         return df
     except: return pd.DataFrame()
 
@@ -729,12 +739,33 @@ elif st.session_state.menu_activo == "🔍 CONSULTAR":
 
 elif st.session_state.menu_activo == "⚙️ PERMISOS" and es_admin:
     df_ed = st.data_editor(df_config, num_rows="dynamic", hide_index=True)
-    if st.button("💾 Guardar"):
+    if st.button("💾 Guardar", use_container_width=True):
         if supabase:
+            exito = True
             for _, row in df_ed.iterrows():
                 try:
                     row_dict = {str(k).lower(): v for k, v in row.to_dict().items()}
-                    supabase.table("config_consultores").upsert(row_dict).execute()
-                except:
-                    pass
-        st.rerun()
+                    
+                    # Asegurar la limpieza e integridad de la clave primaria
+                    if "consultor" not in row_dict or not str(row_dict["consultor"]).strip():
+                        continue # Evitamos problemas si hay filas vacías
+                        
+                    # Casting explícito de las variables numéricas antes de enviarlas
+                    if "valor_hora" in row_dict:
+                        try: row_dict["valor_hora"] = float(row_dict["valor_hora"])
+                        except: row_dict["valor_hora"] = 0.0
+                    else:
+                        row_dict["valor_hora"] = 0.0 # Valor por default si el campo fue borrado
+                        
+                    if "obj_diario" in row_dict:
+                        try: row_dict["obj_diario"] = float(row_dict["obj_diario"])
+                        except: row_dict["obj_diario"] = 8.0 # Default a 8 hs
+                        
+                    response = supabase.table("config_consultores").upsert(row_dict).execute()
+                except Exception as e:
+                    exito = False
+                    st.error(f"Error detallado en {row.get('CONSULTOR', '')}: {str(e)}")
+            
+            if exito: st.success("✅ ¡Cambios Guardados Cómodamente!")
+            time.sleep(1)
+            st.rerun()
