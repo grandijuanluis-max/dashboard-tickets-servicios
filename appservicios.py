@@ -234,7 +234,9 @@ def obtener_config():
                 df[col] = df[col].astype(str).str.strip().str.upper().str.replace(r"\.0$", "", regex=True)
                 
         return df
-    except: return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error cargando config: {str(e)}")
+        return pd.DataFrame()
 
 def obtener_datos_tickets():
     if not supabase: return pd.DataFrame()
@@ -330,6 +332,11 @@ if not st.session_state.autenticado:
                         st.session_state.autenticado, st.session_state.usuario_logueado = True, c_in
                         st.rerun()
                     else: st.error("Credenciales incorrectas")
+                else:
+                    if supabase is None:
+                        st.error("Error: Las credenciales de Supabase no están configuradas correctamente en secrets.toml")
+                    else:
+                        st.error("Error: No se obtuvieron usuarios de la base de datos.")
     st.stop()
 
 # --- CARGA DE DATOS ---
