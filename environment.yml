@@ -1,0 +1,17 @@
+# Streamlit Cloud prioriza este archivo sobre requirements.txt y fija Python 3.11.
+name: dashboard-tickets-servicios
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - streamlit==1.59.2
+      - starlette==1.3.1
+      - pandas==2.2.3
+      - numpy==2.0.2
+      - pyarrow==19.0.1
+      - pillow==11.1.0
+      - fpdf==1.7.2
+      - openpyxl==3.1.5
+      - supabase==2.15.1
