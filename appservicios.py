@@ -238,12 +238,29 @@ def obtener_config():
         st.error(f"Error cargando config: {str(e)}")
         return pd.DataFrame()
 
+def _fetch_all_rows(table_name: str, page_size: int = 1000):
+    """Lee todas las filas. PostgREST/Supabase limita a 1000 por request por defecto."""
+    if not supabase:
+        return []
+    rows = []
+    start = 0
+    while True:
+        end = start + page_size - 1
+        response = supabase.table(table_name).select("*").range(start, end).execute()
+        batch = response.data or []
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        start += page_size
+    return rows
+
+
 def obtener_datos_tickets():
     if not supabase: return pd.DataFrame()
     try:
-        response = supabase.table("bd_dashboard_servicios").select("*").execute()
-        if not response.data: return pd.DataFrame()
-        df = pd.DataFrame(response.data)
+        data = _fetch_all_rows("bd_dashboard_servicios")
+        if not data: return pd.DataFrame()
+        df = pd.DataFrame(data)
         df.columns = [str(c).strip().upper().replace('AÑO', 'ANIO') for c in df.columns]
         if "ID_TICKET" in df.columns:
             df["ID_NUM"] = pd.to_numeric(df["ID_TICKET"], errors='coerce').fillna(0).astype(int)
@@ -254,6 +271,29 @@ def obtener_datos_tickets():
         df["MES"] = pd.to_numeric(df.get("MES", 0), errors='coerce').fillna(0).astype(int)
         return df.fillna("")
     except: return pd.DataFrame()
+
+
+def obtener_proximo_id_ticket() -> int:
+    """Próximo ID real desde la DB (no depende del tope de 1000 filas del select)."""
+    if not supabase:
+        return 1
+    try:
+        response = (
+            supabase.table("bd_dashboard_servicios")
+            .select("id_ticket")
+            .order("id_ticket", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            return int(response.data[0]["id_ticket"]) + 1
+    except Exception:
+        pass
+    # Fallback si falla el order: calcular sobre el dataset completo paginado
+    df = obtener_datos_tickets()
+    if not df.empty and "ID_NUM" in df.columns:
+        return int(df["ID_NUM"].max()) + 1
+    return 1
 
 def registrar_auditoria(id_ticket, accion, consultor):
     if not supabase: return
@@ -268,17 +308,33 @@ def registrar_auditoria(id_ticket, accion, consultor):
     except: pass
 
 def guardar_seguro(data_dict, accion_msg):
-    if not supabase: return False
+    """ALTA = insert (nuevo). MODIF = update (no pisa otros tickets).
+    Retorna el id_ticket guardado, o None si falla."""
+    if not supabase: return None
+    clean_dict = {k.lower(): v for k, v in data_dict.items() if k.upper() not in ["ID_NUM", "FE_DT"]}
+    es_alta = str(accion_msg).upper().startswith("ALTA")
     intentos = 0
-    while intentos < 2:
+    last_error = None
+    while intentos < 3:
         try:
-            clean_dict = {k.lower(): v for k, v in data_dict.items() if k.upper() not in ["ID_NUM", "FE_DT"]}
-            supabase.table("bd_dashboard_servicios").upsert(clean_dict).execute()
-            return True
+            table = supabase.table("bd_dashboard_servicios")
+            if es_alta:
+                table.insert(clean_dict).execute()
+            else:
+                ticket_id = clean_dict.get("id_ticket")
+                if ticket_id is None:
+                    raise ValueError("Falta id_ticket para actualizar")
+                table.update(clean_dict).eq("id_ticket", ticket_id).execute()
+            return int(clean_dict.get("id_ticket") or 0) or True
         except Exception as e:
+            last_error = e
             intentos += 1
-            time.sleep(1)
-    return False
+            # Si el ID chocó (concurrencia / PK), pedir el siguiente y reintentar
+            if es_alta and ("duplicate" in str(e).lower() or "unique" in str(e).lower() or "23505" in str(e)):
+                clean_dict["id_ticket"] = obtener_proximo_id_ticket()
+            time.sleep(0.5)
+    st.error(f"No se pudo guardar el ticket: {last_error}")
+    return None
 
 def get_index_seguro(lista, valor_buscado):
     try:
@@ -441,9 +497,9 @@ OPC_CLI = sorted(["PALAVERSICH", "IPR", "KARTONSEC", "PASINA", "ANHSA", "SG_MONT
 # ➕ SOLAPA 1: NUEVO
 # ==========================================
 if st.session_state.menu_activo == "➕ NUEVO":
-    proximo_id = int(df_actual["ID_NUM"].max()) + 1 if not df_actual.empty else 1
+    proximo_id_preview = obtener_proximo_id_ticket()
     with st.form("f_nuevo", clear_on_submit=True):
-        st.subheader(f"Nuevo Registro #{proximo_id}")
+        st.subheader(f"Nuevo Registro (próximo ID estimado: #{proximo_id_preview})")
         c1, c2, c3 = st.columns(3)
         with c1:
             st.text_input("CONSULTOR", value=nombre_consultor, disabled=True)
@@ -458,10 +514,13 @@ if st.session_state.menu_activo == "➕ NUEVO":
         if st.form_submit_button("💾 GUARDAR TICKET"):
             if not usu_n.strip() or not con_txt.strip() or tie_n <= 0: st.error("Completa campos obligatorios.")
             else:
+                # Recalcular al grabar para no reutilizar un ID (ej. 1003) por el tope de 1000 filas
+                proximo_id = obtener_proximo_id_ticket()
                 nuevo_dict = {"ID_TICKET": proximo_id, "CONSULTOR": nombre_consultor, "TIPO_CONS": tipo_n, "PRIORIDAD": prio_n, "ESTADO": est_n, "ATENCION": ate_n, "CLIENTES": cli_n, "USUARIO": usu_n, "FE_CONSULT": fe_n.strftime('%d/%m/%Y'), "MODULO": mod_n, "CONSULTAS": con_txt, "RESPUESTAS": rta_txt, "TIEMPO_RES": tie_n, "ONLINE": on_n, "ANIO": fe_n.year, "MES": fe_n.month}
-                if guardar_seguro(nuevo_dict, "ALTA"):
-                    registrar_auditoria(proximo_id, f"ALTA ({est_n})", nombre_consultor)
-                    st.success(f"✅ Ticket #{proximo_id} guardado."); time.sleep(1); st.rerun()
+                id_guardado = guardar_seguro(nuevo_dict, "ALTA")
+                if id_guardado:
+                    registrar_auditoria(id_guardado, f"ALTA ({est_n})", nombre_consultor)
+                    st.success(f"✅ Ticket #{id_guardado} guardado."); time.sleep(1); st.rerun()
 
 # ==========================================
 # ✏️ SOLAPA 2: MODIFICAR
@@ -502,7 +561,7 @@ elif st.session_state.menu_activo == "✏️ MODIFICAR":
                     "CONSULTAS": n_con, "RESPUESTAS": n_rta, "TIEMPO_RES": n_tie, "ONLINE": n_on,
                     "ANIO": n_fe.year, "MES": n_fe.month
                 }
-                if guardar_seguro(upd_dict, "MODIF"):
+                if guardar_seguro(upd_dict, "MODIF") is not None:
                     registrar_auditoria(id_m, f"MODIFICACION ({n_est})", nombre_consultor)
                     st.success("✅ Registro actualizado correctamente."); time.sleep(1); st.rerun()
     else: st.warning("No hay tickets pendientes.")
