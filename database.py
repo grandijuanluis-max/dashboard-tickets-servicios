@@ -4,7 +4,10 @@ import sqlite3
 from datetime import datetime, date
 from typing import Optional, Dict, Any, List
 from supabase import create_client, Client
-from src.config import settings
+try:
+    from src.config import settings
+except ImportError:
+    from config import settings
 
 logger = logging.getLogger(__name__)
 

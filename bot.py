@@ -13,10 +13,16 @@ from telegram.ext import (
     filters
 )
 
-from src.config import settings
-from src.database import db
-from src.calendar_service import calendar_service
-from src.ai_service import ai_service, resolver_periodo
+try:
+    from src.config import settings
+    from src.database import db
+    from src.calendar_service import calendar_service
+    from src.ai_service import ai_service, resolver_periodo
+except ImportError:
+    from config import settings
+    from database import db
+    from calendar_service import calendar_service
+    from ai_service import ai_service, resolver_periodo
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

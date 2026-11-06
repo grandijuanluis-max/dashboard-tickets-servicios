@@ -3,7 +3,10 @@ import logging
 from datetime import datetime, date, time, timedelta
 import pytz
 from typing import Dict, Any, Optional, List
-from src.config import settings
+try:
+    from src.config import settings
+except ImportError:
+    from config import settings
 
 logger = logging.getLogger(__name__)
 

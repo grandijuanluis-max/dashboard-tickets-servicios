@@ -5,7 +5,10 @@ import pytz
 from typing import List, Dict, Any, Optional
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from src.config import settings
+try:
+    from src.config import settings, BASE_DIR
+except ImportError:
+    from config import settings, BASE_DIR
 
 logger = logging.getLogger(__name__)
 

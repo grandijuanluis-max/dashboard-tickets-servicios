@@ -4,7 +4,12 @@ from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
 # Cargar variables del .env
-BASE_DIR = Path(__file__).resolve().parent.parent
+_curr = Path(__file__).resolve().parent
+if (_curr / ".env").exists() or (_curr / "requirements.txt").exists():
+    BASE_DIR = _curr
+else:
+    BASE_DIR = _curr.parent
+
 ENV_PATH = BASE_DIR / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
