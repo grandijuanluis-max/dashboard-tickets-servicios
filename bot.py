@@ -670,8 +670,98 @@ async def ranking_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- MENSAJES DE TEXTO Y LENGUAJE NATURAL ---
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_override: Optional[str] = None):
-    """Interpreta el mensaje con IA y ejecuta la acción correspondiente."""
+def _nombre_corto(nombre: Optional[str]) -> str:
+    """Formatea un nombre de consultor para mensajes amigables."""
+    n = str(nombre or "").upper()
+    if "MELANI" in n:
+        return "Melani"
+    if "JUAN" in n:
+        return "Juan Luis"
+    return str(nombre or "Equipo")
+
+async def _ejecutar_completar_compromiso(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id_origen: Optional[int],
+    id_comp: int,
+    completado_por: str,
+    minutos_override: Optional[int] = None,
+    cliente_override: Optional[str] = None,
+    modulo_override: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Completa un compromiso, genera su ticket CERRADO y envía notificaciones al grupo y asignador."""
+    res = db.completar_compromiso(
+        id_comp,
+        completado_por=completado_por,
+        minutos_override=minutos_override,
+        cliente_override=cliente_override,
+        modulo_override=modulo_override,
+    )
+    if not res.get("ok"):
+        return res
+
+    comp = res.get("compromiso") or {}
+    ticket = res.get("ticket") or {}
+    id_ticket = res.get("id_ticket")
+    quien = _nombre_corto(res.get("completado_por") or completado_por)
+    tarea_txt = comp.get("tarea", f"Tarea #{id_comp}")
+    cliente_txt = ticket.get("clientes") or comp.get("cliente") or "GENERAL"
+    modulo_txt = ticket.get("modulo") or comp.get("modulo") or "OTROS"
+    tiempo_min = ticket.get("tiempo_res") or comp.get("tiempo_estimado_min") or 60
+
+    if id_ticket:
+        aviso_ticket = (
+            f"🎫 *Ticket #{id_ticket} creado y CERRADO automáticamente*\n"
+            f"🏢 *Cliente:* {cliente_txt} | 📁 *Módulo:* {modulo_txt}\n"
+            f"⏱️ *Tiempo imputado:* `{tiempo_min} min` (`{float(tiempo_min) / 60.0:.2f} hs`)"
+        )
+    else:
+        aviso_ticket = "⚠️ _La tarea quedó completada, pero no se pudo generar el ticket automático en Supabase._"
+
+    msg_respuesta = (
+        f"🎉 *¡Tarea #{id_comp} completada por {quien}!*\n"
+        f"📝 *Detalle:* {tarea_txt}\n\n"
+        f"{aviso_ticket}"
+    )
+    res["mensaje"] = msg_respuesta
+
+    group_id_raw = getattr(settings, "TELEGRAM_GROUP_CHAT_ID", None)
+    if group_id_raw:
+        try:
+            group_id = int(str(group_id_raw).strip())
+            if chat_id_origen != group_id:
+                await send_group_safe(
+                    context.bot,
+                    group_id,
+                    f"📢 *Aviso de tarea completada*\n\n{msg_respuesta}",
+                )
+        except Exception as e:
+            logger.warning(f"No se pudo notificar al grupo sobre tarea #{id_comp}: {e}")
+
+    origen = str(comp.get("origen") or "")
+    if origen.startswith("telegram:"):
+        asignador = origen.split(":", 1)[1].strip().upper()
+        if asignador and asignador != str(completado_por or "").strip().upper():
+            tg_asig = db.get_consultant_telegram_id(asignador)
+            if tg_asig and tg_asig != chat_id_origen and str(tg_asig) != str(group_id_raw or "").strip():
+                try:
+                    await send_group_safe(
+                        context.bot,
+                        tg_asig,
+                        f"🔔 *{_nombre_corto(completado_por)} completó la tarea #{id_comp} que le asignaste:*\n"
+                        f"📝 {tarea_txt}\n{aviso_ticket}",
+                    )
+                except Exception as e:
+                    logger.warning(f"No se pudo avisar por privado al asignador {asignador}: {e}")
+
+    return res
+
+async def handle_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    texto_override: Optional[str] = None,
+    tipo_entrada: str = "texto",
+):
+    """Interpreta el mensaje con IA, registra el pedido en Supabase y ejecuta la acción correspondiente."""
     user = update.effective_user
     texto_usuario = texto_override or (update.effective_message.text if update.effective_message else None)
     if not texto_usuario:
@@ -679,8 +769,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
 
     consultor_db = db.get_consultant_by_telegram_id(user.id)
     consultor_nombre = consultor_db["consultor"] if consultor_db else user.first_name.upper()
+    chat_id = update.effective_chat.id if update.effective_chat else None
 
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
     try:
         analisis = ai_service.parse_user_message(texto_usuario, consultor_nombre)
@@ -692,357 +783,455 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
         intencion = "CONVERSACION_GENERAL"
         datos = {}
 
-    if intencion == "REGISTRAR_TICKET":
-        if not consultor_db:
-            await update.message.reply_text(
-                "⚠️ Para registrar tickets en el sistema oficial, primero vinculá tu usuario con:\n"
-                "`/vincular TU_NOMBRE`  _(ej: `/vincular MELANI`)_\n\n"
-                "Usa `/consultores` para ver los nombres válidos.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
+    pedido_logged = False
+    reg_destinatario = datos.get("destinatario") or datos.get("consultor_asignado")
+    reg_cliente = datos.get("cliente")
+    reg_modulo = datos.get("modulo")
+    reg_estado = "registrado"
+    reg_id_compromiso = None
+    reg_id_ticket = None
+    reg_detalle = None
 
-        cliente = datos.get("cliente", "GENERAL")
-        minutos = int(datos.get("minutos", 60))
-        consultas = datos.get("consultas", texto_usuario)
-        respuestas = datos.get("respuestas", "Resuelto según requerimiento")
-        modulo = datos.get("modulo", "OTROS")
-        usuario_cliente = datos.get("usuario_cliente", "GENERAL")
-        atencion = datos.get("atencion", "WHATSAPP")
-
-        consultor_asignado = datos.get("consultor_asignado") or consultor_nombre
-
-        ticket = db.create_ticket(
-            consultor=consultor_asignado,
-            cliente=cliente,
-            tiempo_res_minutos=minutos,
-            consultas=consultas,
-            respuestas=respuestas,
-            usuario_cliente=usuario_cliente,
-            modulo=modulo,
-            atencion=atencion
-        )
-
-        if ticket:
-            hs = minutos / 60.0
-            id_t = ticket.get('id_ticket')
-            c_tag = str(ticket.get('consultor') or consultor_asignado).upper()
-            c_tag_clean = "Melani" if "MELANI" in c_tag else ("Juan Luis" if "JUAN" in c_tag else c_tag)
-            resp = (
-                f"✅ *¡Anotadísimo! Cargué `{hs:.2f} hs` en {ticket.get('clientes')}*\n\n"
-                f"👤 *Para:* {c_tag_clean}\n"
-                f"📝 *Detalle:* {ticket.get('consultas')}\n"
-                f"📁 *Módulo:* {ticket.get('modulo')} _(Ticket #{id_t})_"
-            )
-            kb = [[InlineKeyboardButton("🗑️ Deshacer / Borrar", callback_data=f"borrar_ticket_{id_t}")]]
-            await safe_reply(update, resp, reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            resp = "⚠️ Che, hubo un temita al guardar las horas en la base. Probá de nuevo en un ratito."
-            await safe_reply(update, resp)
-
-    elif intencion == "BORRAR_ULTIMO_TICKET":
-        ultimo = db.get_last_ticket_by_consultant(consultor_nombre)
-        if not ultimo:
-            await safe_reply(update, "⚠️ No encontré ningún ticket tuyo reciente para borrar.")
-            return
-
-        id_t = ultimo.get("id_ticket")
-        ok = db.delete_ticket(id_t, consultor=consultor_nombre or user.first_name)
-        if ok:
-            await safe_reply(
-                update,
-                f"🗑️ *Listo, ya borré el ticket #{id_t} de {ultimo.get('clientes')}.*\n"
-                f"⏱️ Eran `{ultimo.get('tiempo_res')} min` en _{ultimo.get('consultas')}_."
-            )
-        else:
-            await safe_reply(update, f"⚠️ Che, no pude borrar el ticket #{id_t}.")
-
-    elif intencion == "CREAR_EVENTO":
-        titulo = datos.get("titulo", "Reunión")
-        fecha_hora_str = datos.get("fecha_hora")
-        duracion = int(datos.get("duracion_minutos", 60))
-        desc = datos.get("descripcion", "")
-
-        try:
-            start_dt = datetime.fromisoformat(fecha_hora_str)
-            # 1. Comprobar si hay conflictos en Google Calendar
-            conflictos = calendar_service.check_conflicts(start_dt, duration_minutes=duracion)
-            if conflictos:
-                conf = conflictos[0]
-                conf_titulo = conf.get("summary", "Evento agendado")
-                dt_s = conf.get("dt_start")
-                dt_e = conf.get("dt_end")
-                h_inicio = dt_s.strftime("%H:%M") if dt_s else "horario ocupado"
-                h_fin = dt_e.strftime("%H:%M") if dt_e else ""
-                rango_hora = f"{h_inicio} a {h_fin} hs" if h_fin else h_inicio
-
-                context.user_data["evento_pendiente"] = {
-                    "titulo": titulo,
-                    "start_datetime_iso": start_dt.isoformat(),
-                    "duracion": duracion,
-                    "desc": desc,
-                    "conflicto_titulo": conf_titulo
-                }
-
-                keyboard = [
-                    [
-                        InlineKeyboardButton("⚡ Agendar de todas formas", callback_data="agendar_forzar"),
-                        InlineKeyboardButton("✏️ Mover +1h", callback_data="mover_evento_1h")
-                    ],
-                    [
-                        InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_evento")
-                    ]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-
-                aviso = (
-                    f"⚠️ *Conflicto de agenda detectado*\n\n"
-                    f"No podés agendar *\"{titulo}\"* el {start_dt.strftime('%d/%m')} a las {start_dt.strftime('%H:%M')} hs porque ya tenés:\n"
-                    f"📌 *\"{conf_titulo}\"* de {rango_hora}.\n\n"
-                    f"¿Qué preferís hacer?"
+    try:
+        if intencion == "REGISTRAR_TICKET":
+            if not consultor_db:
+                reg_estado = "requiere_vinculacion"
+                reg_detalle = "Usuario no vinculado"
+                await update.message.reply_text(
+                    "⚠️ Para registrar tickets en el sistema oficial, primero vinculá tu usuario con:\n"
+                    "`/vincular TU_NOMBRE`  _(ej: `/vincular MELANI`)_\n\n"
+                    "Usa `/consultores` para ver los nombres válidos.",
+                    parse_mode=ParseMode.MARKDOWN
                 )
-                await safe_reply(update, aviso, reply_markup=reply_markup)
                 return
 
-            # Si no hay conflicto, crear normalmente
-            evento = calendar_service.create_event(
-                summary=titulo,
-                start_datetime=start_dt,
-                duration_minutes=duracion,
-                description=desc
+            cliente = datos.get("cliente", "GENERAL")
+            minutos = int(datos.get("minutos", 60))
+            consultas = datos.get("consultas", texto_usuario)
+            respuestas = datos.get("respuestas", "Resuelto según requerimiento")
+            modulo = datos.get("modulo", "OTROS")
+            usuario_cliente = datos.get("usuario_cliente", "GENERAL")
+            atencion = datos.get("atencion", "WHATSAPP")
+
+            consultor_asignado = datos.get("consultor_asignado") or consultor_nombre
+            reg_destinatario = consultor_asignado
+            reg_cliente = cliente
+            reg_modulo = modulo
+
+            ticket = db.create_ticket(
+                consultor=consultor_asignado,
+                cliente=cliente,
+                tiempo_res_minutos=minutos,
+                consultas=consultas,
+                respuestas=respuestas,
+                usuario_cliente=usuario_cliente,
+                modulo=modulo,
+                atencion=atencion
             )
-            if evento:
-                link = evento.get("htmlLink", "")
-                link_text = f"\n🔗 [Ver en Google Calendar]({link})" if link else ""
+
+            if ticket:
+                hs = minutos / 60.0
+                id_t = ticket.get('id_ticket')
+                reg_id_ticket = id_t
+                reg_estado = "ticket_creado"
+                reg_detalle = ticket.get('consultas')
+                c_tag = str(ticket.get('consultor') or consultor_asignado).upper()
+                c_tag_clean = "Melani" if "MELANI" in c_tag else ("Juan Luis" if "JUAN" in c_tag else c_tag)
                 resp = (
-                    f"📅 *¡Reunión agendada! Nos vemos ahí:*\n\n"
-                    f"📌 *{titulo}*\n"
-                    f"🗓️ *Cuándo:* {start_dt.strftime('%d/%m/%Y')} a las `{start_dt.strftime('%H:%M')} hs`\n"
-                    f"⏳ *Duración:* {duracion} min{link_text}"
+                    f"✅ *¡Anotadísimo! Cargué `{hs:.2f} hs` en {ticket.get('clientes')}*\n\n"
+                    f"👤 *Para:* {c_tag_clean}\n"
+                    f"📝 *Detalle:* {ticket.get('consultas')}\n"
+                    f"📁 *Módulo:* {ticket.get('modulo')} _(Ticket #{id_t})_"
+                )
+                kb = [[InlineKeyboardButton("🗑️ Deshacer / Borrar", callback_data=f"borrar_ticket_{id_t}")]]
+                await safe_reply(update, resp, reply_markup=InlineKeyboardMarkup(kb))
+            else:
+                reg_estado = "error"
+                reg_detalle = "Error al guardar ticket"
+                resp = "⚠️ Che, hubo un temita al guardar las horas en la base. Probá de nuevo en un ratito."
+                await safe_reply(update, resp)
+
+        elif intencion == "BORRAR_ULTIMO_TICKET":
+            ultimo = db.get_last_ticket_by_consultant(consultor_nombre)
+            if not ultimo:
+                reg_estado = "no_encontrado"
+                await safe_reply(update, "⚠️ No encontré ningún ticket tuyo reciente para borrar.")
+                return
+
+            id_t = ultimo.get("id_ticket")
+            reg_id_ticket = id_t
+            reg_cliente = ultimo.get("clientes")
+            reg_modulo = ultimo.get("modulo")
+            ok = db.delete_ticket(id_t, consultor=consultor_nombre or user.first_name)
+            if ok:
+                reg_estado = "ticket_borrado"
+                await safe_reply(
+                    update,
+                    f"🗑️ *Listo, ya borré el ticket #{id_t} de {ultimo.get('clientes')}.*\n"
+                    f"⏱️ Eran `{ultimo.get('tiempo_res')} min` en _{ultimo.get('consultas')}_."
                 )
             else:
-                resp = _format_calendar_create_error()
-        except Exception as e:
-            logger.error(f"Error parseando fecha de evento: {e}")
-            resp = "⚠️ No llegué a entender bien el día y la hora. Decime por ejemplo: _'Agendá mañana a las 11hs con Palaversich'_."
+                reg_estado = "error"
+                await safe_reply(update, f"⚠️ Che, no pude borrar el ticket #{id_t}.")
 
-        await safe_reply(update, resp)
+        elif intencion == "CREAR_EVENTO":
+            titulo = datos.get("titulo", "Reunión")
+            fecha_hora_str = datos.get("fecha_hora")
+            duracion = int(datos.get("duracion_minutos", 60))
+            desc = datos.get("descripcion", "")
+            reg_detalle = titulo
 
-    elif intencion == "REGISTRAR_COMPROMISOS":
-        fecha_obj_str = datos.get("fecha_objetivo")
-        tareas = datos.get("tareas", [])
-        destinatario = (datos.get("destinatario") or consultor_nombre).strip().upper()
-        try:
-            fecha_obj = datetime.fromisoformat(fecha_obj_str).date()
-        except Exception:
-            fecha_obj = datetime.now(pytz.timezone(settings.TIMEZONE)).date()
+            try:
+                start_dt = datetime.fromisoformat(fecha_hora_str)
+                # 1. Comprobar si hay conflictos en Google Calendar
+                conflictos = calendar_service.check_conflicts(start_dt, duration_minutes=duracion)
+                if conflictos:
+                    conf = conflictos[0]
+                    conf_titulo = conf.get("summary", "Evento agendado")
+                    dt_s = conf.get("dt_start")
+                    dt_e = conf.get("dt_end")
+                    h_inicio = dt_s.strftime("%H:%M") if dt_s else "horario ocupado"
+                    h_fin = dt_e.strftime("%H:%M") if dt_e else ""
+                    rango_hora = f"{h_inicio} a {h_fin} hs" if h_fin else h_inicio
 
-        guardadas = []
-        for t_item in tareas:
-            c = db.crear_compromiso(
-                consultor=destinatario,
-                tarea=t_item,
+                    context.user_data["evento_pendiente"] = {
+                        "titulo": titulo,
+                        "start_datetime_iso": start_dt.isoformat(),
+                        "duracion": duracion,
+                        "desc": desc,
+                        "conflicto_titulo": conf_titulo
+                    }
+
+                    keyboard = [
+                        [
+                            InlineKeyboardButton("⚡ Agendar de todas formas", callback_data="agendar_forzar"),
+                            InlineKeyboardButton("✏️ Mover +1h", callback_data="mover_evento_1h")
+                        ],
+                        [
+                            InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_evento")
+                        ]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+
+                    reg_estado = "conflicto_agenda"
+                    aviso = (
+                        f"⚠️ *Conflicto de agenda detectado*\n\n"
+                        f"No podés agendar *\"{titulo}\"* el {start_dt.strftime('%d/%m')} a las {start_dt.strftime('%H:%M')} hs porque ya tenés:\n"
+                        f"📌 *\"{conf_titulo}\"* de {rango_hora}.\n\n"
+                        f"¿Qué preferís hacer?"
+                    )
+                    await safe_reply(update, aviso, reply_markup=reply_markup)
+                    return
+
+                # Si no hay conflicto, crear normalmente
+                evento = calendar_service.create_event(
+                    summary=titulo,
+                    start_datetime=start_dt,
+                    duration_minutes=duracion,
+                    description=desc
+                )
+                if evento:
+                    reg_estado = "evento_agendado"
+                    link = evento.get("htmlLink", "")
+                    link_text = f"\n🔗 [Ver en Google Calendar]({link})" if link else ""
+                    resp = (
+                        f"📅 *¡Reunión agendada! Nos vemos ahí:*\n\n"
+                        f"📌 *{titulo}*\n"
+                        f"🗓️ *Cuándo:* {start_dt.strftime('%d/%m/%Y')} a las `{start_dt.strftime('%H:%M')} hs`\n"
+                        f"⏳ *Duración:* {duracion} min{link_text}"
+                    )
+                else:
+                    reg_estado = "error"
+                    resp = _format_calendar_create_error()
+            except Exception as e:
+                logger.error(f"Error parseando fecha de evento: {e}")
+                reg_estado = "error"
+                resp = "⚠️ No llegué a entender bien el día y la hora. Decime por ejemplo: _'Agendá mañana a las 11hs con Palaversich'_."
+
+            await safe_reply(update, resp)
+
+        elif intencion == "REGISTRAR_COMPROMISOS":
+            fecha_obj_str = datos.get("fecha_objetivo")
+            tareas = datos.get("tareas", [])
+            destinatario = (datos.get("destinatario") or consultor_nombre).strip().upper()
+            cliente_comp = datos.get("cliente") or "GENERAL"
+            modulo_comp = datos.get("modulo") or "OTROS"
+            minutos_comp = int(datos.get("minutos") or 60)
+            reg_destinatario = destinatario
+            reg_cliente = cliente_comp
+            reg_modulo = modulo_comp
+            try:
+                fecha_obj = datetime.fromisoformat(fecha_obj_str).date()
+            except Exception:
+                fecha_obj = datetime.now(pytz.timezone(settings.TIMEZONE)).date()
+
+            guardadas = []
+            for t_item in tareas:
+                c = db.crear_compromiso(
+                    consultor=destinatario,
+                    tarea=t_item,
+                    fecha_objetivo=fecha_obj,
+                    origen=f"telegram:{consultor_nombre}",
+                    cliente=cliente_comp,
+                    modulo=modulo_comp,
+                    tiempo_estimado_min=minutos_comp,
+                )
+                if c:
+                    guardadas.append(c)
+                    db.registrar_pedido_bot(
+                        mensaje_original=texto_usuario,
+                        tipo_entrada=tipo_entrada,
+                        consultor=consultor_nombre,
+                        destinatario=destinatario,
+                        intencion="REGISTRAR_COMPROMISOS",
+                        cliente=cliente_comp,
+                        modulo=modulo_comp,
+                        estado="pendiente",
+                        id_compromiso=c.get("id"),
+                        detalle_resultado=c.get("tarea"),
+                        telegram_user_id=user.id,
+                        telegram_chat_id=chat_id,
+                    )
+
+            if guardadas:
+                pedido_logged = True
+                dia_txt = "mañana" if fecha_obj > datetime.now(pytz.timezone(settings.TIMEZONE)).date() else "hoy"
+                fecha_fmt = fecha_obj.strftime('%d/%m/%Y')
+
+                dest_nombre = _nombre_corto(destinatario)
+                cons_nombre = _nombre_corto(consultor_nombre)
+
+                if destinatario != consultor_nombre.upper():
+                    resp = f"🎯 *Tarea asignada a {dest_nombre} (por {cons_nombre}) — para {dia_txt} ({fecha_fmt}):*\n\n"
+                else:
+                    resp = f"🎯 *Compromiso guardado para vos ({dest_nombre}) — para {dia_txt} ({fecha_fmt}):*\n\n"
+
+                keyboard = []
+                for item in guardadas:
+                    resp += f"• *#{item['id']}* {item['tarea']}\n"
+                    keyboard.append([
+                        InlineKeyboardButton(f"✅ #{item['id']} {item['tarea'][:25]}", callback_data=f"completar_tarea_{item['id']}")
+                    ])
+                resp += f"\n_Al completarla se crea y cierra su ticket automático. Tocá ✅ o decí 'tarea #{guardadas[0]['id']} lista'._"
+                reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+                await safe_reply(update, resp, reply_markup=reply_markup)
+            else:
+                reg_estado = "error"
+                await safe_reply(update, "⚠️ No pude registrar las tareas. Intentá de nuevo.")
+
+        elif intencion == "CONSULTAR_COMPROMISOS":
+            fecha_obj_str = datos.get("fecha_objetivo")
+            filtro_cons = datos.get("consultor_filtro")
+            try:
+                fecha_obj = datetime.fromisoformat(fecha_obj_str).date()
+            except Exception:
+                fecha_obj = datetime.now(pytz.timezone(settings.TIMEZONE)).date()
+
+            if filtro_cons == "MIO":
+                target_cons = consultor_nombre
+            elif filtro_cons in ["JUANLUIS", "MELANI"]:
+                target_cons = filtro_cons
+            else:
+                target_cons = None
+
+            pendientes = db.obtener_compromisos(
+                consultor=target_cons,
                 fecha_objetivo=fecha_obj,
-                origen=f"telegram:{consultor_nombre}"
+                estado="pendiente"
             )
-            if c:
-                guardadas.append(c)
+            completadas = db.obtener_compromisos(
+                consultor=target_cons,
+                fecha_objetivo=fecha_obj,
+                estado="completada"
+            )
 
-        if guardadas:
-            dia_txt = "mañana" if fecha_obj > datetime.now(pytz.timezone(settings.TIMEZONE)).date() else "hoy"
+            dia_txt = "HOY" if fecha_obj == datetime.now(pytz.timezone(settings.TIMEZONE)).date() else f"EL {fecha_obj.strftime('%d/%m/%Y')}"
             fecha_fmt = fecha_obj.strftime('%d/%m/%Y')
 
-            dest_nombre = "Juan Luis" if "JUAN" in destinatario else ("Melani" if "MELANI" in destinatario else destinatario)
-            cons_nombre = "Juan Luis" if "JUAN" in consultor_nombre.upper() else ("Melani" if "MELANI" in consultor_nombre.upper() else consultor_nombre)
+            if not pendientes and not completadas:
+                if target_cons:
+                    resp = f"✨ *{target_cons} no tiene tareas anotadas para {dia_txt.lower()}.*"
+                else:
+                    resp = f"✨ *No hay tareas registradas para {dia_txt.lower()} ({fecha_fmt}).*\n\nPodés dejar una tarea diciendo ej:\n• _\"Dejale una tarea a Juan Luis: llamar a Cargill\"_\n• _\"Tarea para Melani: revisar facturas\"_\n• _\"Tareas de hoy: 1. Llamar cliente 2. Enviar reporte\"_"
+                await safe_reply(update, resp)
+                return
 
-            if destinatario != consultor_nombre.upper():
-                resp = f"🎯 *Tarea asignada a {dest_nombre} (por {cons_nombre}) — para {dia_txt} ({fecha_fmt}):*\n\n"
-            else:
-                resp = f"🎯 *Compromiso guardado para vos ({dest_nombre}) — para {dia_txt} ({fecha_fmt}):*\n\n"
-
+            resp = f"🎯 *HORIZONTE DE TAREAS ({dia_txt} - {fecha_fmt}):*\n"
+            resp += "───────────────────────────\n\n"
             keyboard = []
-            for item in guardadas:
-                resp += f"• *#{item['id']}* {item['tarea']}\n"
-                keyboard.append([
-                    InlineKeyboardButton(f"✅ #{item['id']} {item['tarea'][:25]}", callback_data=f"completar_tarea_{item['id']}")
-                ])
-            resp += f"\n_Podés marcarla como lista tocando el botón ✅ o diciendo 'tarea #{guardadas[0]['id']} lista'._"
+
+            pendientes_melani = [p for p in pendientes if "MELANI" in str(p.get("consultor", "")).upper()]
+            pendientes_jl = [p for p in pendientes if "JUAN" in str(p.get("consultor", "")).upper()]
+            otros_pendientes = [p for p in pendientes if p not in pendientes_melani and p not in pendientes_jl]
+
+            if pendientes_melani:
+                resp += "👩‍💼 *Tareas de MELANI:*\n"
+                for p in pendientes_melani:
+                    resp += f"• [ ] *#{p['id']}* {p['tarea']}\n"
+                    keyboard.append([
+                        InlineKeyboardButton(f"✅ #{p['id']} (Melani) {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
+                    ])
+                resp += "\n"
+
+            if pendientes_jl:
+                resp += "👨‍💼 *Tareas de JUAN LUIS:*\n"
+                for p in pendientes_jl:
+                    resp += f"• [ ] *#{p['id']}* {p['tarea']}\n"
+                    keyboard.append([
+                        InlineKeyboardButton(f"✅ #{p['id']} (Juan) {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
+                    ])
+                resp += "\n"
+
+            if otros_pendientes:
+                resp += "📌 *Otras tareas:*\n"
+                for p in otros_pendientes:
+                    resp += f"• [ ] *#{p['id']}* {p['tarea']} _({p.get('consultor', '')})_\n"
+                    keyboard.append([
+                        InlineKeyboardButton(f"✅ #{p['id']} {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
+                    ])
+                resp += "\n"
+
+            if completadas:
+                resp += "✅ *Completadas:*\n"
+                for c in completadas:
+                    con_tag = f" _({c.get('consultor', '')})_" if c.get('consultor') else ""
+                    t_tag = f" _(Ticket #{c['id_ticket']})_" if c.get('id_ticket') else ""
+                    resp += f"• [x] ~#{c['id']} {c['tarea']}~{con_tag}{t_tag}\n"
+                resp += "\n"
+
+            resp += "_Tocá el botón ✅ para marcarla como lista o decí 'tarea [número] lista'._"
             reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
             await safe_reply(update, resp, reply_markup=reply_markup)
-        else:
-            await safe_reply(update, "⚠️ No pude registrar las tareas. Intentá de nuevo.")
 
-    elif intencion == "CONSULTAR_COMPROMISOS":
-        fecha_obj_str = datos.get("fecha_objetivo")
-        filtro_cons = datos.get("consultor_filtro")
-        try:
-            fecha_obj = datetime.fromisoformat(fecha_obj_str).date()
-        except Exception:
-            fecha_obj = datetime.now(pytz.timezone(settings.TIMEZONE)).date()
-
-        if filtro_cons == "MIO":
-            target_cons = consultor_nombre
-        elif filtro_cons in ["JUANLUIS", "MELANI"]:
-            target_cons = filtro_cons
-        else:
-            target_cons = None
-
-        pendientes = db.obtener_compromisos(
-            consultor=target_cons,
-            fecha_objetivo=fecha_obj,
-            estado="pendiente"
-        )
-        completadas = db.obtener_compromisos(
-            consultor=target_cons,
-            fecha_objetivo=fecha_obj,
-            estado="completada"
-        )
-
-        dia_txt = "HOY" if fecha_obj == datetime.now(pytz.timezone(settings.TIMEZONE)).date() else f"EL {fecha_obj.strftime('%d/%m/%Y')}"
-        fecha_fmt = fecha_obj.strftime('%d/%m/%Y')
-
-        if not pendientes and not completadas:
-            if target_cons:
-                resp = f"✨ *{target_cons} no tiene tareas anotadas para {dia_txt.lower()}.*"
+        elif intencion == "COMPLETAR_COMPROMISO":
+            id_comp = int(datos.get("id_compromiso", 0))
+            reg_id_compromiso = id_comp
+            res = await _ejecutar_completar_compromiso(
+                context=context,
+                chat_id_origen=chat_id,
+                id_comp=id_comp,
+                completado_por=consultor_nombre,
+                minutos_override=datos.get("minutos"),
+                cliente_override=datos.get("cliente"),
+                modulo_override=datos.get("modulo"),
+            )
+            if res.get("ok"):
+                reg_estado = "completado"
+                reg_id_ticket = res.get("id_ticket")
+                comp_ok = res.get("compromiso") or {}
+                ticket_ok = res.get("ticket") or {}
+                reg_cliente = ticket_ok.get("clientes") or comp_ok.get("cliente")
+                reg_modulo = ticket_ok.get("modulo") or comp_ok.get("modulo")
+                reg_detalle = comp_ok.get("tarea")
+                resp = res["mensaje"]
+            elif res.get("reason") == "already_completed":
+                reg_estado = "ya_completada"
+                comp_prev = res.get("compromiso") or {}
+                id_t_prev = comp_prev.get("id_ticket")
+                reg_id_ticket = id_t_prev
+                extra_t = f" _(ya tiene el Ticket #{id_t_prev} asociado)_" if id_t_prev else ""
+                resp = f"ℹ️ La tarea #{id_comp} ya estaba marcada como completada{extra_t}."
             else:
-                resp = f"✨ *No hay tareas registradas para {dia_txt.lower()} ({fecha_fmt}).*\n\nPodés dejar una tarea diciendo ej:\n• _\"Dejale una tarea a Juan Luis: llamar a Cargill\"_\n• _\"Tarea para Melani: revisar facturas\"_\n• _\"Tareas de hoy: 1. Llamar cliente 2. Enviar reporte\"_"
+                reg_estado = "no_encontrado"
+                resp = f"⚠️ No encontré la tarea #{id_comp} o no se pudo actualizar."
             await safe_reply(update, resp)
-            return
 
-        resp = f"🎯 *HORIZONTE DE TAREAS ({dia_txt} - {fecha_fmt}):*\n"
-        resp += "───────────────────────────\n\n"
-        keyboard = []
+        elif intencion == "CONSULTAR_AGENDA":
+            await responder_agenda(update, context, datos)
 
-        pendientes_melani = [p for p in pendientes if "MELANI" in str(p.get("consultor", "")).upper()]
-        pendientes_jl = [p for p in pendientes if "JUAN" in str(p.get("consultor", "")).upper()]
-        otros_pendientes = [p for p in pendientes if p not in pendientes_melani and p not in pendientes_jl]
+        elif intencion == "CONSULTAR_HORAS":
+            f_modo = datos.get("fecha", "HOY")
+            c_filtro = datos.get("consultor", "TODOS")
+            modo_suj = datos.get("modo_sujeto", "AMBOS")
+            await responder_consulta_horas(
+                update,
+                fecha_modo=f_modo,
+                consultor_filtro=c_filtro,
+                consultor_usuario=consultor_nombre,
+                modo_sujeto=modo_suj
+            )
 
-        if pendientes_melani:
-            resp += "👩‍💼 *Tareas de MELANI:*\n"
-            for p in pendientes_melani:
-                resp += f"• [ ] *#{p['id']}* {p['tarea']}\n"
-                keyboard.append([
-                    InlineKeyboardButton(f"✅ #{p['id']} (Melani) {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
-                ])
-            resp += "\n"
+        elif intencion == "RANKING_CLIENTES":
+            await responder_ranking_clientes(update, datos)
 
-        if pendientes_jl:
-            resp += "👨‍💼 *Tareas de JUAN LUIS:*\n"
-            for p in pendientes_jl:
-                resp += f"• [ ] *#{p['id']}* {p['tarea']}\n"
-                keyboard.append([
-                    InlineKeyboardButton(f"✅ #{p['id']} (Juan) {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
-                ])
-            resp += "\n"
+        elif intencion == "BUSCAR_HISTORIAL":
+            cliente = datos.get("cliente")
+            consultor = datos.get("consultor")
+            modulo = datos.get("modulo")
+            texto = datos.get("texto_busqueda")
+            es_horas = datos.get("es_consulta_horas", False)
+            fecha_relativa = datos.get("fecha_relativa")
+            modo_sujeto = datos.get("modo_sujeto", "AMBOS")
 
-        if otros_pendientes:
-            resp += "📌 *Otras tareas:*\n"
-            for p in otros_pendientes:
-                resp += f"• [ ] *#{p['id']}* {p['tarea']} _({p.get('consultor', '')})_\n"
-                keyboard.append([
-                    InlineKeyboardButton(f"✅ #{p['id']} {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
-                ])
-            resp += "\n"
+            tz = pytz.timezone(settings.TIMEZONE)
+            ahora = datetime.now(tz)
+            target_fecha = None
+            if fecha_relativa == "AYER":
+                target_fecha = (ahora - timedelta(days=1)).date()
+            elif fecha_relativa == "HOY":
+                target_fecha = ahora.date()
+            elif fecha_relativa == "ANTEAYER":
+                target_fecha = (ahora - timedelta(days=2)).date()
 
-        if completadas:
-            resp += "✅ *Completadas:*\n"
-            for c in completadas:
-                con_tag = f" _({c.get('consultor', '')})_" if c.get('consultor') else ""
-                resp += f"• [x] ~#{c['id']} {c['tarea']}~{con_tag}\n"
-            resp += "\n"
+            mes = datos.get("mes")
+            anio = datos.get("anio") or ahora.year
 
-        resp += "_Tocá el botón ✅ para marcarla como lista o decí 'tarea [número] lista'._"
-        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-        await safe_reply(update, resp, reply_markup=reply_markup)
+            # Mapear filtro consultor según el sujeto detectado
+            filtro_consultor = None
+            if consultor == "MIO" or modo_sujeto == "MIO":
+                filtro_consultor = consultor_nombre
+            elif consultor == "JEFE" or modo_sujeto == "JEFE":
+                filtro_consultor = "JUANLUIS"
+            elif consultor == "MELANI" or modo_sujeto == "COLABORADOR":
+                filtro_consultor = "MELANI"
+            elif consultor and consultor != "TODOS":
+                filtro_consultor = consultor
 
-    elif intencion == "COMPLETAR_COMPROMISO":
-        id_comp = int(datos.get("id_compromiso", 0))
-        ok = db.completar_compromiso(id_comp)
-        if ok:
-            resp = f"🎉 *¡Excelente! Compromiso #{id_comp} marcado como completado.*"
+            tickets = db.search_tickets(
+                texto=texto,
+                cliente=cliente,
+                consultor=filtro_consultor,
+                modulo=modulo,
+                fecha=target_fecha,
+                mes=mes if not target_fecha else None,
+                anio=anio if not target_fecha else None,
+                limit=None if es_horas else 30
+            )
+
+            respuesta_formateada = formatear_resultado_historial(
+                tickets=tickets,
+                cliente_buscado=cliente,
+                texto_buscado=texto,
+                fecha_exacta=target_fecha,
+                mes=mes,
+                anio=anio,
+                es_consulta_horas=es_horas,
+                consultor_buscado=filtro_consultor,
+                modo_sujeto=modo_sujeto,
+                consultor_usuario=consultor_nombre
+            )
+            await safe_reply(update, respuesta_formateada)
+
         else:
-            resp = f"⚠️ No encontré el compromiso #{id_comp} o ya estaba completado."
-        await safe_reply(update, resp)
-
-    elif intencion == "CONSULTAR_AGENDA":
-        await responder_agenda(update, context, datos)
-
-    elif intencion == "CONSULTAR_HORAS":
-        f_modo = datos.get("fecha", "HOY")
-        c_filtro = datos.get("consultor", "TODOS")
-        modo_suj = datos.get("modo_sujeto", "AMBOS")
-        await responder_consulta_horas(
-            update, 
-            fecha_modo=f_modo, 
-            consultor_filtro=c_filtro, 
-            consultor_usuario=consultor_nombre,
-            modo_sujeto=modo_suj
-        )
-
-    elif intencion == "RANKING_CLIENTES":
-        await responder_ranking_clientes(update, datos)
-
-    elif intencion == "BUSCAR_HISTORIAL":
-        cliente = datos.get("cliente")
-        consultor = datos.get("consultor")
-        modulo = datos.get("modulo")
-        texto = datos.get("texto_busqueda")
-        es_horas = datos.get("es_consulta_horas", False)
-        fecha_relativa = datos.get("fecha_relativa")
-        modo_sujeto = datos.get("modo_sujeto", "AMBOS")
-        
-        tz = pytz.timezone(settings.TIMEZONE)
-        ahora = datetime.now(tz)
-        target_fecha = None
-        if fecha_relativa == "AYER":
-            target_fecha = (ahora - timedelta(days=1)).date()
-        elif fecha_relativa == "HOY":
-            target_fecha = ahora.date()
-        elif fecha_relativa == "ANTEAYER":
-            target_fecha = (ahora - timedelta(days=2)).date()
-
-        mes = datos.get("mes")
-        anio = datos.get("anio") or ahora.year
-
-        # Mapear filtro consultor según el sujeto detectado
-        filtro_consultor = None
-        if consultor == "MIO" or modo_sujeto == "MIO":
-            filtro_consultor = consultor_nombre
-        elif consultor == "JEFE" or modo_sujeto == "JEFE":
-            filtro_consultor = "JUANLUIS"
-        elif consultor == "MELANI" or modo_sujeto == "COLABORADOR":
-            filtro_consultor = "MELANI"
-        elif consultor and consultor != "TODOS":
-            filtro_consultor = consultor
-
-        tickets = db.search_tickets(
-            texto=texto,
-            cliente=cliente,
-            consultor=filtro_consultor,
-            modulo=modulo,
-            fecha=target_fecha,
-            mes=mes if not target_fecha else None,
-            anio=anio if not target_fecha else None,
-            limit=None if es_horas else 30
-        )
-
-        respuesta_formateada = formatear_resultado_historial(
-            tickets=tickets,
-            cliente_buscado=cliente,
-            texto_buscado=texto,
-            fecha_exacta=target_fecha,
-            mes=mes,
-            anio=anio,
-            es_consulta_horas=es_horas,
-            consultor_buscado=filtro_consultor,
-            modo_sujeto=modo_sujeto,
-            consultor_usuario=consultor_nombre
-        )
-        await safe_reply(update, respuesta_formateada)
-
-    else:
-        resp = ai_service.responder_conversacion_ia(texto_usuario, user_name=consultor_nombre)
-        await safe_reply(update, resp)
+            resp = ai_service.responder_conversacion_ia(texto_usuario, user_name=consultor_nombre)
+            await safe_reply(update, resp)
+    finally:
+        if not pedido_logged:
+            db.registrar_pedido_bot(
+                mensaje_original=texto_usuario,
+                tipo_entrada=tipo_entrada,
+                consultor=consultor_nombre,
+                destinatario=reg_destinatario,
+                intencion=intencion,
+                cliente=reg_cliente,
+                modulo=reg_modulo,
+                estado=reg_estado,
+                id_compromiso=reg_id_compromiso,
+                id_ticket=reg_id_ticket,
+                detalle_resultado=reg_detalle,
+                telegram_user_id=user.id if user else None,
+                telegram_chat_id=chat_id,
+            )
 
 async def borrar_ultimo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /borrar_ultimo: elimina el último ticket registrado."""
@@ -1099,18 +1288,50 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         id_str = data.replace("completar_tarea_", "")
         try:
             id_c = int(id_str)
-            ok = db.completar_compromiso(id_c)
-            if ok:
-                await query.answer(f"¡Tarea #{id_c} marcada como completada! 🎉", show_alert=False)
+            user = update.effective_user
+            consultor_db = db.get_consultant_by_telegram_id(user.id) if user else None
+            c_nom = consultor_db["consultor"] if consultor_db else (user.first_name.upper() if user else "EQUIPO")
+            chat_id = update.effective_chat.id if update.effective_chat else None
+
+            res = await _ejecutar_completar_compromiso(
+                context=context,
+                chat_id_origen=chat_id,
+                id_comp=id_c,
+                completado_por=c_nom,
+            )
+            if res.get("ok"):
+                id_t = res.get("id_ticket")
+                comp_ok = res.get("compromiso") or {}
+                ticket_ok = res.get("ticket") or {}
+                db.registrar_pedido_bot(
+                    mensaje_original=f"[Botón completar tarea #{id_c}]",
+                    tipo_entrada="boton",
+                    consultor=c_nom,
+                    destinatario=comp_ok.get("consultor"),
+                    intencion="COMPLETAR_COMPROMISO",
+                    cliente=ticket_ok.get("clientes") or comp_ok.get("cliente"),
+                    modulo=ticket_ok.get("modulo") or comp_ok.get("modulo"),
+                    estado="completado",
+                    id_compromiso=id_c,
+                    id_ticket=id_t,
+                    detalle_resultado=comp_ok.get("tarea"),
+                    telegram_user_id=user.id if user else None,
+                    telegram_chat_id=chat_id,
+                )
                 curr_text = query.message.text or ""
-                # Actualizar el texto reemplazando #id por tachado
-                new_text = curr_text.replace(f"#{id_c}", f"~#{id_c}~ (Listo ✅)")
+                marca_ticket = f" (Listo ✅ Ticket #{id_t})" if id_t else " (Listo ✅)"
+                new_text = curr_text.replace(f"#{id_c}", f"~#{id_c}~{marca_ticket}")
                 try:
                     await query.edit_message_text(new_text)
                 except Exception:
                     pass
+                await safe_reply(update, res["mensaje"])
+            elif res.get("reason") == "already_completed":
+                id_t_prev = (res.get("compromiso") or {}).get("id_ticket")
+                extra_t = f" _(Ticket #{id_t_prev})_" if id_t_prev else ""
+                await safe_reply(update, f"ℹ️ La tarea #{id_c} ya estaba completada{extra_t}.")
             else:
-                await query.answer("No se pudo completar la tarea.", show_alert=True)
+                await safe_reply(update, f"⚠️ No se pudo completar la tarea #{id_c}.")
         except Exception as e:
             logger.error(f"Error completando tarea vía callback: {e}")
 
@@ -1193,6 +1414,19 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         texto_transcripto = ai_service.transcribe_audio(bytes(audio_bytes), mime_type=mime_type)
 
         if not texto_transcripto:
+            user = update.effective_user
+            consultor_db = db.get_consultant_by_telegram_id(user.id) if user else None
+            c_nom = consultor_db["consultor"] if consultor_db else (user.first_name.upper() if user else None)
+            db.registrar_pedido_bot(
+                mensaje_original="[Audio no transcripto]",
+                tipo_entrada="audio",
+                consultor=c_nom,
+                intencion="AUDIO_NO_ENTENDIDO",
+                estado="error",
+                detalle_resultado="No se pudo transcribir el audio",
+                telegram_user_id=user.id if user else None,
+                telegram_chat_id=update.effective_chat.id if update.effective_chat else None,
+            )
             await temp_msg.edit_text("⚠️ No pude entender el audio o hubo un problema al transcribirlo. Podés volver a grabarlo o escribirlo en texto.")
             return
 
@@ -1202,7 +1436,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             await temp_msg.edit_text(f"🗣️ \"{texto_transcripto}\"")
 
         # Invocamos handle_message con el texto transcripto explícitamente
-        await handle_message(update, context, texto_override=texto_transcripto)
+        await handle_message(update, context, texto_override=texto_transcripto, tipo_entrada="audio")
 
     except Exception as e:
         logger.error(f"Error procesando mensaje de voz: {e}", exc_info=True)

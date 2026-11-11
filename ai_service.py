@@ -636,19 +636,48 @@ def parsear_crear_evento(t: str, user_text: str, ahora: datetime, tz) -> Optiona
         }
     }
 
+def _extraer_contexto_tarea(t: str) -> Dict[str, Any]:
+    """Extrae cliente, módulo y duración explícita (si fue mencionada) de un pedido de tarea."""
+    cliente = detectar_cliente(t)
+    modulo = None
+    for m in MODULOS_CONOCIDOS:
+        if m.lower() in t:
+            modulo = m
+            break
+    tiene_duracion = bool(
+        re.search(r"\b(?:hora|horas|hs|min|minuto|minutos)\b|media\s+hora|cuarto\s+de\s+hora|\d+\s*(?:h|hs|m)\b", t)
+    )
+    minutos = extraer_minutos(t) if tiene_duracion else None
+    return {
+        "cliente": cliente,
+        "modulo": modulo,
+        "minutos": minutos,
+    }
+
+
 def parsear_compromisos(t: str, user_text: str, ahora: datetime) -> Optional[Dict[str, Any]]:
     """Detecta carga, consulta o completitud de compromisos/tareas diarias (Horizonte), permitiendo asignar tareas entre consultores."""
     # 1. Completar o tachar tarea: ej "marcar como hecha tarea 3", "completar tarea 3", "tarea 3 lista", "/completar 3"
-    m_comp = re.search(r"(?:completar|marcar\s+(?:como\s+)?hecha|cerrar|liquidar|termin(?:ar|é|e))\s+(?:la\s+)?tarea\s*#?\s*(\d+)", t)
+    m_comp = re.search(
+        r"(?:completar|marcar\s+(?:como\s+)?(?:hecha|list[oa])|cerrar|liquidar|finaliz(?:ar|é|e)|termin(?:ar|é|e)|ya\s+hice)\s+(?:el\s+|la\s+)?(?:tarea|compromiso)\s*#?\s*(\d+)",
+        t,
+    )
     if not m_comp:
-        m_comp = re.search(r"tarea\s*#?\s*(\d+)\s*(?:lista|hecha|completada|terminada|ok|check)", t)
+        m_comp = re.search(
+            r"(?:tarea|compromiso)\s*#?\s*(\d+)\s*(?:lista|listo|hecha|hecho|completada|completado|terminada|terminado|ok|check)",
+            t,
+        )
     if not m_comp:
-        m_comp = re.match(r"^/completar\s*#?(\d+)$", t)
+        m_comp = re.match(r"^/completar\s*#?(\d+)", t)
     if m_comp:
+        ctx_t = _extraer_contexto_tarea(t)
         return {
             "intencion": "COMPLETAR_COMPROMISO",
             "datos": {
-                "id_compromiso": int(m_comp.group(1))
+                "id_compromiso": int(m_comp.group(1)),
+                "minutos": ctx_t["minutos"],
+                "cliente": ctx_t["cliente"],
+                "modulo": ctx_t["modulo"],
             }
         }
 
@@ -757,12 +786,16 @@ def parsear_compromisos(t: str, user_text: str, ahora: datetime) -> Optional[Dic
                         tareas_extraidas.append(limpia)
 
         if tareas_extraidas:
+            ctx_t = _extraer_contexto_tarea(t)
             return {
                 "intencion": "REGISTRAR_COMPROMISOS",
                 "datos": {
                     "fecha_objetivo": fecha_obj.isoformat(),
                     "tareas": tareas_extraidas,
-                    "destinatario": destinatario
+                    "destinatario": destinatario,
+                    "cliente": ctx_t["cliente"] or "GENERAL",
+                    "modulo": ctx_t["modulo"] or "OTROS",
+                    "minutos": ctx_t["minutos"] if ctx_t["minutos"] is not None else 60,
                 }
             }
 

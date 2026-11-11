@@ -1,8 +1,9 @@
 import logging
 import os
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional, Dict, Any, List
+import pytz
 from supabase import create_client, Client
 try:
     from src.config import settings, BASE_DIR
@@ -122,7 +123,8 @@ class Database:
         if not self.is_connected():
             return None
         
-        f = fecha or date.today()
+        tz = pytz.timezone(settings.TIMEZONE)
+        f = fecha or datetime.now(tz).date()
         proximo_id = self.get_proximo_id_ticket()
         
         # Validar y normalizar cliente
@@ -281,8 +283,26 @@ class Database:
             pass
         return "JUANLUIS"
 
+    def get_consultant_telegram_id(self, nombre_consultor: str) -> Optional[int]:
+        """Obtiene el telegram_id de un consultor desde config_consultores."""
+        if not self.is_connected() or not nombre_consultor:
+            return None
+        try:
+            res = (
+                self.client.table("config_consultores")
+                .select("telegram_id")
+                .ilike("consultor", f"%{nombre_consultor.strip().upper()}%")
+                .limit(1)
+                .execute()
+            )
+            if res.data and res.data[0].get("telegram_id"):
+                return int(res.data[0]["telegram_id"])
+        except Exception as e:
+            logger.debug(f"Error obteniendo telegram_id de {nombre_consultor}: {e}")
+        return None
+
     def _init_local_db(self) -> Optional[str]:
-        """Inicializa base de datos local SQLite para fallback de compromisos."""
+        """Inicializa base de datos local SQLite para fallback de compromisos y registro de pedidos."""
         try:
             db_dir = str(BASE_DIR / "data")
             os.makedirs(db_dir, exist_ok=True)
@@ -296,7 +316,47 @@ class Database:
                         fecha_objetivo TEXT NOT NULL,
                         estado TEXT NOT NULL DEFAULT 'pendiente',
                         origen TEXT DEFAULT 'telegram',
+                        cliente TEXT DEFAULT 'GENERAL',
+                        modulo TEXT DEFAULT 'OTROS',
+                        tiempo_estimado_min INTEGER DEFAULT 60,
+                        id_ticket INTEGER,
+                        completado_por TEXT,
+                        completado_at TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                existing_cols = {
+                    row[1] for row in conn.execute("PRAGMA table_info(compromisos_diarios)").fetchall()
+                }
+                for col_name, col_def in [
+                    ("cliente", "TEXT DEFAULT 'GENERAL'"),
+                    ("modulo", "TEXT DEFAULT 'OTROS'"),
+                    ("tiempo_estimado_min", "INTEGER DEFAULT 60"),
+                    ("id_ticket", "INTEGER"),
+                    ("completado_por", "TEXT"),
+                    ("completado_at", "TEXT"),
+                ]:
+                    if col_name not in existing_cols:
+                        conn.execute(f"ALTER TABLE compromisos_diarios ADD COLUMN {col_name} {col_def}")
+
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS registro_pedidos_bot (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        telegram_user_id INTEGER,
+                        telegram_chat_id INTEGER,
+                        consultor TEXT,
+                        destinatario TEXT,
+                        tipo_entrada TEXT NOT NULL DEFAULT 'texto',
+                        mensaje_original TEXT NOT NULL,
+                        intencion TEXT,
+                        cliente TEXT,
+                        modulo TEXT,
+                        estado TEXT NOT NULL DEFAULT 'registrado',
+                        id_compromiso INTEGER,
+                        id_ticket INTEGER,
+                        detalle_resultado TEXT,
+                        completado_at TEXT
                     )
                 """)
                 conn.commit()
@@ -305,26 +365,57 @@ class Database:
             logger.error(f"Error inicializando SQLite local: {e}")
             return None
 
-    def crear_compromiso(self, consultor: str, tarea: str, fecha_objetivo: date, origen: str = "telegram") -> Optional[Dict[str, Any]]:
+    def crear_compromiso(
+        self,
+        consultor: str,
+        tarea: str,
+        fecha_objetivo: date,
+        origen: str = "telegram",
+        cliente: str = "GENERAL",
+        modulo: str = "OTROS",
+        tiempo_estimado_min: int = 60,
+    ) -> Optional[Dict[str, Any]]:
         """Registra un compromiso/tarea diaria en Supabase o en fallback SQLite."""
         consultor_limpio = consultor.strip().upper()
         tarea_limpia = tarea.strip()
         fecha_str = fecha_objetivo.isoformat()
+        cli_clean = (cliente or "GENERAL").strip().upper()
+        mod_clean = (modulo or "OTROS").strip().upper()
+        mins_clean = int(tiempo_estimado_min or 60)
 
         # 1. Intentar Supabase
         if self.is_connected():
+            payload_full = {
+                "consultor": consultor_limpio,
+                "tarea": tarea_limpia,
+                "fecha_objetivo": fecha_str,
+                "estado": "pendiente",
+                "origen": origen,
+                "cliente": cli_clean,
+                "modulo": mod_clean,
+                "tiempo_estimado_min": mins_clean,
+            }
             try:
-                res = self.client.table("compromisos_diarios").insert({
-                    "consultor": consultor_limpio,
-                    "tarea": tarea_limpia,
-                    "fecha_objetivo": fecha_str,
-                    "estado": "pendiente",
-                    "origen": origen
-                }).execute()
+                res = self.client.table("compromisos_diarios").insert(payload_full).execute()
                 if res.data and len(res.data) > 0:
                     return res.data[0]
-            except Exception as e:
-                logger.warning(f"No se pudo guardar compromiso en Supabase ({e}). Usando base local.")
+            except Exception as e_full:
+                # Reintentar con columnas mínimas si aún no se corrió el ALTER TABLE en Supabase
+                if "column" in str(e_full).lower() or "schema cache" in str(e_full).lower():
+                    try:
+                        res = self.client.table("compromisos_diarios").insert({
+                            "consultor": consultor_limpio,
+                            "tarea": tarea_limpia,
+                            "fecha_objetivo": fecha_str,
+                            "estado": "pendiente",
+                            "origen": origen,
+                        }).execute()
+                        if res.data and len(res.data) > 0:
+                            return res.data[0]
+                    except Exception as e_min:
+                        logger.warning(f"No se pudo guardar compromiso en Supabase ({e_min}). Usando base local.")
+                else:
+                    logger.warning(f"No se pudo guardar compromiso en Supabase ({e_full}). Usando base local.")
 
         # 2. Fallback SQLite
         db_path = self._init_local_db()
@@ -333,8 +424,10 @@ class Database:
                 with sqlite3.connect(db_path) as conn:
                     cur = conn.cursor()
                     cur.execute(
-                        "INSERT INTO compromisos_diarios (consultor, tarea, fecha_objetivo, estado, origen) VALUES (?, ?, ?, 'pendiente', ?)",
-                        (consultor_limpio, tarea_limpia, fecha_str, origen)
+                        """INSERT INTO compromisos_diarios
+                           (consultor, tarea, fecha_objetivo, estado, origen, cliente, modulo, tiempo_estimado_min)
+                           VALUES (?, ?, ?, 'pendiente', ?, ?, ?, ?)""",
+                        (consultor_limpio, tarea_limpia, fecha_str, origen, cli_clean, mod_clean, mins_clean)
                     )
                     new_id = cur.lastrowid
                     conn.commit()
@@ -344,10 +437,37 @@ class Database:
                         "tarea": tarea_limpia,
                         "fecha_objetivo": fecha_str,
                         "estado": "pendiente",
-                        "origen": origen
+                        "origen": origen,
+                        "cliente": cli_clean,
+                        "modulo": mod_clean,
+                        "tiempo_estimado_min": mins_clean,
                     }
             except Exception as e:
                 logger.error(f"Error guardando compromiso en SQLite: {e}")
+        return None
+
+    def obtener_compromiso_por_id(self, id_compromiso: int) -> Optional[Dict[str, Any]]:
+        """Obtiene una tarea puntual por su ID desde Supabase o SQLite."""
+        if self.is_connected():
+            try:
+                res = self.client.table("compromisos_diarios").select("*").eq("id", int(id_compromiso)).limit(1).execute()
+                if res.data and len(res.data) > 0:
+                    return res.data[0]
+            except Exception as e:
+                logger.debug(f"obtener_compromiso_por_id Supabase fallback ({e})")
+
+        db_path = self._init_local_db()
+        if db_path and os.path.exists(db_path):
+            try:
+                with sqlite3.connect(db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    row = conn.execute(
+                        "SELECT * FROM compromisos_diarios WHERE id = ?", (int(id_compromiso),)
+                    ).fetchone()
+                    if row:
+                        return dict(row)
+            except Exception as e:
+                logger.error(f"Error buscando compromiso #{id_compromiso} en SQLite: {e}")
         return None
 
     def obtener_compromisos(self, consultor: Optional[str] = None, fecha_objetivo: Optional[date] = None, estado: Optional[str] = "pendiente") -> List[Dict[str, Any]]:
@@ -395,28 +515,241 @@ class Database:
                 logger.error(f"Error consultando SQLite local: {e}")
         return []
 
-    def completar_compromiso(self, id_compromiso: int) -> bool:
-        """Marca un compromiso como completado."""
-        # 1. Supabase
+    def registrar_pedido_bot(
+        self,
+        mensaje_original: str,
+        tipo_entrada: str = "texto",
+        consultor: Optional[str] = None,
+        destinatario: Optional[str] = None,
+        intencion: Optional[str] = None,
+        cliente: Optional[str] = None,
+        modulo: Optional[str] = None,
+        estado: str = "registrado",
+        id_compromiso: Optional[int] = None,
+        id_ticket: Optional[int] = None,
+        detalle_resultado: Optional[str] = None,
+        telegram_user_id: Optional[int] = None,
+        telegram_chat_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Guarda en registro_pedidos_bot todo lo solicitado al asistente (audio o texto)."""
+        payload = {
+            "telegram_user_id": int(telegram_user_id) if telegram_user_id else None,
+            "telegram_chat_id": int(telegram_chat_id) if telegram_chat_id else None,
+            "consultor": consultor.strip().upper() if consultor else None,
+            "destinatario": destinatario.strip().upper() if destinatario else None,
+            "tipo_entrada": "audio" if str(tipo_entrada).lower() == "audio" else "texto",
+            "mensaje_original": mensaje_original,
+            "intencion": intencion,
+            "cliente": cliente.strip().upper() if cliente else None,
+            "modulo": modulo.strip().upper() if modulo else None,
+            "estado": estado,
+            "id_compromiso": int(id_compromiso) if id_compromiso else None,
+            "id_ticket": int(id_ticket) if id_ticket else None,
+            "detalle_resultado": detalle_resultado,
+        }
+
         if self.is_connected():
             try:
-                res = self.client.table("compromisos_diarios").update({"estado": "completada"}).eq("id", id_compromiso).execute()
+                res = self.client.table("registro_pedidos_bot").insert(payload).execute()
                 if res.data and len(res.data) > 0:
-                    return True
+                    return res.data[0]
+            except Exception as e:
+                logger.warning(f"No se pudo guardar en registro_pedidos_bot en Supabase ({e}). Usando fallback local.")
+
+        db_path = self._init_local_db()
+        if db_path:
+            try:
+                with sqlite3.connect(db_path) as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """INSERT INTO registro_pedidos_bot
+                           (telegram_user_id, telegram_chat_id, consultor, destinatario, tipo_entrada,
+                            mensaje_original, intencion, cliente, modulo, estado, id_compromiso, id_ticket, detalle_resultado)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            payload["telegram_user_id"], payload["telegram_chat_id"],
+                            payload["consultor"], payload["destinatario"], payload["tipo_entrada"],
+                            payload["mensaje_original"], payload["intencion"], payload["cliente"],
+                            payload["modulo"], payload["estado"], payload["id_compromiso"],
+                            payload["id_ticket"], payload["detalle_resultado"],
+                        ),
+                    )
+                    new_id = cur.lastrowid
+                    conn.commit()
+                    return {"id": new_id, **payload}
+            except Exception as e:
+                logger.error(f"Error guardando pedido en SQLite local: {e}")
+        return None
+
+    def _marcar_pedido_completado_por_compromiso(
+        self,
+        id_compromiso: int,
+        id_ticket: Optional[int],
+        completado_at_iso: str,
+        detalle: Optional[str] = None,
+    ):
+        """Actualiza en registro_pedidos_bot el pedido vinculado al compromiso completado."""
+        upd = {"estado": "completada", "completado_at": completado_at_iso}
+        if id_ticket:
+            upd["id_ticket"] = int(id_ticket)
+        if detalle:
+            upd["detalle_resultado"] = detalle
+
+        if self.is_connected():
+            try:
+                self.client.table("registro_pedidos_bot").update(upd).eq("id_compromiso", int(id_compromiso)).execute()
+            except Exception as e:
+                logger.debug(f"Actualización de registro_pedidos_bot en Supabase omitida: {e}")
+
+        db_path = self._init_local_db()
+        if db_path and os.path.exists(db_path):
+            try:
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute(
+                        "UPDATE registro_pedidos_bot SET estado = 'completada', id_ticket = COALESCE(?, id_ticket), completado_at = ?, detalle_resultado = COALESCE(?, detalle_resultado) WHERE id_compromiso = ?",
+                        (int(id_ticket) if id_ticket else None, completado_at_iso, detalle, int(id_compromiso)),
+                    )
+                    conn.commit()
+            except Exception as e:
+                logger.debug(f"Actualización SQLite registro_pedidos_bot falló: {e}")
+
+    def completar_compromiso(
+        self,
+        id_compromiso: int,
+        completado_por: Optional[str] = None,
+        minutos_override: Optional[int] = None,
+        cliente_override: Optional[str] = None,
+        modulo_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Marca un compromiso como completado y crea/cierra automáticamente su ticket en bd_dashboard_servicios."""
+        comp = self.obtener_compromiso_por_id(id_compromiso)
+        if not comp:
+            return {"ok": False, "reason": "not_found"}
+
+        if str(comp.get("estado", "")).lower() == "completada":
+            return {
+                "ok": False,
+                "reason": "already_completed",
+                "compromiso": comp,
+                "id_ticket": comp.get("id_ticket"),
+            }
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        quien_completa = (completado_por or comp.get("consultor") or "MELANI").strip().upper()
+        consultor_ticket = (comp.get("consultor") or quien_completa).strip().upper()
+        cliente_ticket = (cliente_override or comp.get("cliente") or "GENERAL").strip().upper()
+        modulo_ticket = (modulo_override or comp.get("modulo") or "OTROS").strip().upper()
+        minutos_ticket = int(minutos_override or comp.get("tiempo_estimado_min") or 60)
+        tarea_txt = comp.get("tarea") or f"Tarea #{id_compromiso}"
+
+        # Crear o cerrar ticket oficial en bd_dashboard_servicios
+        ticket_creado = None
+        id_ticket_existente = comp.get("id_ticket")
+        if id_ticket_existente and self.is_connected():
+            try:
+                res_upd = (
+                    self.client.table("bd_dashboard_servicios")
+                    .update({
+                        "estado": "CERRADO",
+                        "tiempo_res": minutos_ticket,
+                        "respuestas": f"Tarea #{id_compromiso} completada por {quien_completa} vía Telegram",
+                    })
+                    .eq("id_ticket", int(id_ticket_existente))
+                    .execute()
+                )
+                if res_upd.data:
+                    ticket_creado = res_upd.data[0]
+                    self.registrar_auditoria(
+                        int(id_ticket_existente),
+                        f"CIERRE (Tarea #{id_compromiso}) - Vía Telegram",
+                        quien_completa,
+                    )
+            except Exception as e:
+                logger.error(f"Error cerrando ticket #{id_ticket_existente}: {e}")
+
+        if not ticket_creado:
+            ticket_creado = self.create_ticket(
+                consultor=consultor_ticket,
+                cliente=cliente_ticket,
+                tiempo_res_minutos=minutos_ticket,
+                consultas=tarea_txt,
+                respuestas=f"Tarea #{id_compromiso} completada por {quien_completa} vía Telegram",
+                usuario_cliente="GENERAL",
+                modulo=modulo_ticket,
+                estado="CERRADO",
+                atencion="WHATSAPP",
+            )
+
+        id_ticket_final = ticket_creado.get("id_ticket") if ticket_creado else id_ticket_existente
+
+        # Actualizar compromiso como completado
+        marcado = False
+        if self.is_connected():
+            upd_full = {
+                "estado": "completada",
+                "id_ticket": int(id_ticket_final) if id_ticket_final else None,
+                "completado_por": quien_completa,
+                "completado_at": now_iso,
+            }
+            try:
+                res = self.client.table("compromisos_diarios").update(upd_full).eq("id", int(id_compromiso)).execute()
+                if res.data and len(res.data) > 0:
+                    marcado = True
             except Exception:
-                pass
-        # 2. SQLite
+                try:
+                    res = (
+                        self.client.table("compromisos_diarios")
+                        .update({"estado": "completada"})
+                        .eq("id", int(id_compromiso))
+                        .execute()
+                    )
+                    if res.data and len(res.data) > 0:
+                        marcado = True
+                except Exception:
+                    pass
+
         db_path = self._init_local_db()
         if db_path and os.path.exists(db_path):
             try:
                 with sqlite3.connect(db_path) as conn:
                     cur = conn.cursor()
-                    cur.execute("UPDATE compromisos_diarios SET estado = 'completada' WHERE id = ?", (id_compromiso,))
+                    cur.execute(
+                        """UPDATE compromisos_diarios
+                           SET estado = 'completada',
+                               id_ticket = COALESCE(?, id_ticket),
+                               completado_por = ?,
+                               completado_at = ?
+                           WHERE id = ?""",
+                        (int(id_ticket_final) if id_ticket_final else None, quien_completa, now_iso, int(id_compromiso)),
+                    )
                     conn.commit()
-                    return cur.rowcount > 0
+                    if cur.rowcount > 0:
+                        marcado = True
             except Exception as e:
                 logger.error(f"Error completando en SQLite: {e}")
-        return False
+
+        if not marcado:
+            return {"ok": False, "reason": "update_failed", "compromiso": comp}
+
+        detalle_res = (
+            f"Completada por {quien_completa} -> Ticket #{id_ticket_final} ({cliente_ticket})"
+            if id_ticket_final
+            else f"Completada por {quien_completa}"
+        )
+        self._marcar_pedido_completado_por_compromiso(
+            id_compromiso=int(id_compromiso),
+            id_ticket=id_ticket_final,
+            completado_at_iso=now_iso,
+            detalle=detalle_res,
+        )
+
+        return {
+            "ok": True,
+            "compromiso": comp,
+            "ticket": ticket_creado,
+            "id_ticket": id_ticket_final,
+            "completado_por": quien_completa,
+        }
 
     def eliminar_compromiso(self, id_compromiso: int) -> bool:
         """Elimina un compromiso."""
