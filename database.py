@@ -5,9 +5,9 @@ from datetime import datetime, date
 from typing import Optional, Dict, Any, List
 from supabase import create_client, Client
 try:
-    from src.config import settings
+    from src.config import settings, BASE_DIR
 except ImportError:
-    from config import settings
+    from config import settings, BASE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -284,7 +284,7 @@ class Database:
     def _init_local_db(self) -> Optional[str]:
         """Inicializa base de datos local SQLite para fallback de compromisos."""
         try:
-            db_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+            db_dir = str(BASE_DIR / "data")
             os.makedirs(db_dir, exist_ok=True)
             db_path = os.path.join(db_dir, "compromisos.db")
             with sqlite3.connect(db_path) as conn:

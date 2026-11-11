@@ -9,7 +9,6 @@ if (_curr / ".env").exists() or (_curr / "requirements.txt").exists():
     BASE_DIR = _curr
 else:
     BASE_DIR = _curr.parent
-
 ENV_PATH = BASE_DIR / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
@@ -27,7 +26,10 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
     
     GOOGLE_SERVICE_ACCOUNT_FILE: str = get_credentials_path()
+    GOOGLE_CREDENTIALS_JSON: str = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
+    GOOGLE_TOKEN_JSON: str = os.getenv("GOOGLE_TOKEN_JSON", "")
     GOOGLE_CALENDAR_ID: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+    GOOGLE_CALENDAR_ICS_URL: str = os.getenv("GOOGLE_CALENDAR_ICS_URL", "")
     
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     TIMEZONE: str = os.getenv("TIMEZONE", "America/Argentina/Buenos_Aires")

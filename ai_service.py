@@ -406,115 +406,219 @@ def resolver_destinatario(t: str, user_name: str = "MELANI") -> Dict[str, Any]:
     # 5. SINGULAR POR DEFECTO (si no mencionó plural ni al otro, se refiere a quien habla)
     return {"modo": "MIO", "consultor": user_name, "etiqueta": f"vos ({user_name})"}
 
-def parsear_crear_evento(t: str, user_text: str, ahora: datetime, tz) -> Optional[Dict[str, Any]]:
-    """Detecta si se quiere crear/agendar un evento en Google Calendar."""
-    # 0. Descartar consultas puras de agenda (ej: "¿qué hay en la agenda hoy?", "ver agenda", "mostrar agenda")
-    es_pregunta_agenda = any(p in t for p in [
-        "ver agenda", "mostrar agenda", "revisar agenda", "consultar agenda",
-        "como viene la agenda", "cómo viene la agenda", "que hay en la agenda", "qué hay en la agenda",
-        "que hay hoy", "qué hay hoy", "como viene hoy", "cómo viene hoy",
-        "como viene mañana", "cómo viene mañana"
-    ]) or t.strip() in ["agenda", "calendario", "ver calendario", "mostrar calendario"]
+HORAS_PALABRAS = {
+    "una": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5,
+    "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10,
+    "once": 11, "doce": 12, "trece": 13, "catorce": 14, "quince": 15,
+    "dieciseis": 16, "dieciséis": 16, "diecisiete": 17, "dieciocho": 18,
+    "diecinueve": 19, "veinte": 20, "veintiuno": 21, "veintiuna": 21,
+    "veintidos": 22, "veintidós": 22, "veintitres": 23, "veintitrés": 23
+}
 
-    tiene_verbo_crear_agenda = any(v in t for v in [
-        "agend", "carg", "anot", "crear", "sumar", "program", "poner", "poneme", "reunion", "reunión", "meet", "llamada"
-    ])
-
-    if es_pregunta_agenda and not tiene_verbo_crear_agenda:
-        return None
-
-    # Requiere intención explícita de agendar/crear evento
-    patron_crear = (
-        r"\b(agend[aá]me|agend[aá]te|agend[aá]lo|agend[aá]la|agend[aá]|agendar|"
-        r"cargar\s+(?:en\s+la\s+|en\s+|a\s+la\s+|la\s+)?agenda|"
-        r"carg[aá]\s+(?:en\s+la\s+|en\s+|a\s+la\s+|la\s+)?agenda|"
-        r"cargame\s+(?:en\s+la\s+|en\s+|a\s+la\s+|la\s+)?agenda|"
-        r"poner\s+(?:en\s+la\s+|en\s+)?agenda|poneme\s+(?:en\s+la\s+|en\s+)?agenda|"
-        r"sumar\s+(?:a\s+la\s+|en\s+la\s+)?agenda|sumame\s+(?:a\s+la\s+|en\s+la\s+)?agenda|"
-        r"crear\s+evento|cre[aá]\s+evento|"
-        r"anot[aá]\s+reuni[oó]n|anotar\s+reuni[oó]n|anotame\s+reuni[oó]n|"
-        r"programar\s+reuni[oó]n|program[aá]\s+reuni[oó]n|programar\s+llamada|program[aá]\s+llamada|"
-        r"reuni[oó]n\s+(?:para\s+)?(?:hoy|mañana|manana|el\s+\w+)?\s*(?:a\s+las\s+\d{1,2}|\d{1,2}\s*hs)?|"
-        r"meet\s+(?:para\s+)?(?:hoy|mañana|manana|el\s+\w+)?\s*(?:a\s+las\s+\d{1,2}|\d{1,2}\s*hs)?|"
-        r"call\s+(?:para\s+)?(?:hoy|mañana|manana|el\s+\w+)?\s*(?:a\s+las\s+\d{1,2}|\d{1,2}\s*hs)?)\b"
-    )
-    if not re.search(patron_crear, t):
-        return None
-
-    # Si es solo la palabra "agenda" o "agendar" sin ningún otro dato
-    if t.strip() in ["agenda", "agendar", "crear evento", "reunion", "reunión"]:
-        return None
-
-    # 1. Determinar Fecha
-    target_date = None
+def _extraer_fecha_evento(t: str, ahora: datetime) -> date:
+    """Extrae la fecha objetivo para un evento de Google Calendar."""
     if "pasado mañana" in t or "pasado manana" in t:
-        target_date = ahora.date() + timedelta(days=2)
-    elif "mañana" in t or "manana" in t:
-        target_date = ahora.date() + timedelta(days=1)
-    elif "hoy" in t:
-        target_date = ahora.date()
-    else:
-        for dia_nom, dia_num in DIAS_SEMANA.items():
-            if re.search(rf"\b{dia_nom}\b", t):
-                dias_adelante = (dia_num - ahora.weekday()) % 7
-                if dias_adelante == 0:
-                    dias_adelante = 7
-                target_date = ahora.date() + timedelta(days=dias_adelante)
-                break
-        
-        m_fecha = re.search(r"(\d{1,2})[/.-](\d{1,2})", t)
-        if m_fecha:
-            try:
-                target_date = date(ahora.year, int(m_fecha.group(2)), int(m_fecha.group(1)))
-            except Exception:
-                pass
+        return ahora.date() + timedelta(days=2)
+    if "mañana" in t or "manana" in t:
+        return ahora.date() + timedelta(days=1)
+    if re.search(r"\bhoy\b", t):
+        return ahora.date()
 
-    if not target_date:
-        target_date = ahora.date() + timedelta(days=1)
+    for dia_nom, dia_num in DIAS_SEMANA.items():
+        if re.search(rf"\b{dia_nom}\b", t):
+            dias_adelante = (dia_num - ahora.weekday()) % 7
+            if dias_adelante == 0:
+                dias_adelante = 7
+            return ahora.date() + timedelta(days=dias_adelante)
 
-    # 2. Determinar Hora
+    # Fecha textual: "15 de noviembre"
+    meses_pat = "|".join(MESES_NOMBRE.keys())
+    m_mes_txt = re.search(rf"\b(\d{{1,2}})\s+de\s+({meses_pat})(?:\s+de\s+(\d{{4}}))?\b", t)
+    if m_mes_txt:
+        try:
+            d_val = int(m_mes_txt.group(1))
+            m_val = MESES_NOMBRE[m_mes_txt.group(2)]
+            y_val = int(m_mes_txt.group(3)) if m_mes_txt.group(3) else ahora.year
+            return date(y_val, m_val, d_val)
+        except Exception:
+            pass
+
+    m_fecha = re.search(r"\b(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b", t)
+    if m_fecha:
+        try:
+            d_val = int(m_fecha.group(1))
+            m_val = int(m_fecha.group(2))
+            y_val = int(m_fecha.group(3)) if m_fecha.group(3) else ahora.year
+            if y_val < 100:
+                y_val += 2000
+            return date(y_val, m_val, d_val)
+        except Exception:
+            pass
+
+    return ahora.date() + timedelta(days=1)
+
+def _extraer_hora_evento(t: str) -> tuple[int, int]:
+    """Extrae (hora, minuto) en formato 24h soportando dígitos, palabras de audio y AM/PM."""
     hora = 10
     minuto = 0
-    m_hora_precisa = re.search(r"(?:a las\s*|las\s*)(\d{1,2})(?::(\d{2}))?", t)
+    encontrada = False
+
+    m_hora_precisa = re.search(r"\b(?:a\s+las|las)\s+(\d{1,2})(?:[:.](\d{2}))?\b", t)
     if not m_hora_precisa:
-        m_hora_precisa = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(?:hs|hrs|h\b)", t)
+        m_hora_precisa = re.search(r"\b(\d{1,2})(?:[:.](\d{2}))?\s*(?:hs|hrs|h)\b", t)
 
     if m_hora_precisa:
         h_val = int(m_hora_precisa.group(1))
         if 0 <= h_val <= 23:
             hora = h_val
+            encontrada = True
             if m_hora_precisa.group(2):
                 minuto = int(m_hora_precisa.group(2))
+    else:
+        horas_pat = "|".join(sorted(HORAS_PALABRAS.keys(), key=len, reverse=True))
+        m_pal = re.search(rf"\b(?:a\s+las|las)\s+({horas_pat})\b", t)
+        if m_pal:
+            hora = HORAS_PALABRAS[m_pal.group(1)]
+            encontrada = True
 
+    if encontrada:
+        if "y media" in t and minuto == 0:
+            minuto = 30
+        elif "y cuarto" in t and minuto == 0:
+            minuto = 15
+        elif "menos cuarto" in t and minuto == 0 and hora > 0:
+            hora -= 1
+            minuto = 45
+
+        if any(p in t for p in ["de la tarde", "a la tarde", "por la tarde", "de la noche", "a la noche", "pm", "p.m."]):
+            if 1 <= hora <= 11:
+                hora += 12
+        elif "mediodia" in t or "mediodía" in t:
+            if hora == 0 or hora == 12:
+                hora = 12
+
+    return hora, minuto
+
+def parsear_crear_evento(t: str, user_text: str, ahora: datetime, tz) -> Optional[Dict[str, Any]]:
+    """Detecta si se quiere crear/agendar un evento en Google Calendar."""
+    # 0. Descartar consultas puras de agenda o preguntas sobre reuniones existentes
+    es_pregunta_agenda = any(p in t for p in [
+        "ver agenda", "mostrar agenda", "revisar agenda", "consultar agenda",
+        "como viene la agenda", "cómo viene la agenda", "que hay en la agenda", "qué hay en la agenda",
+        "que hay hoy", "qué hay hoy", "como viene hoy", "cómo viene hoy",
+        "como viene mañana", "cómo viene mañana",
+        "a que hora es la reunion", "a qué hora es la reunión", "cuando es la reunion", "cuándo es la reunión",
+        "que reuniones", "qué reuniones", "tenemos reunion", "tenemos reunión", "hay reunion", "hay reunión"
+    ]) or t.strip() in ["agenda", "calendario", "ver calendario", "mostrar calendario"]
+
+    tiene_verbo_crear_agenda = (
+        re.search(r"\b(?:agend(?:á(?:me|te|lo|la)?|a(?:me|te|lo|la)|ar)|registr[aá](?:me|te|lo|la)?|registrar|anot[aá](?:me|te|lo|la)?|anotar|cre[aá]|crear|sum[aá](?:me)?|sumar|program[aá](?:me)?|programar|poneme|poner)\b", t) is not None
+        or any(p in t for p in [
+            "cargar en la agenda", "cargar en agenda", "cargar a la agenda", "cargar la agenda",
+            "cargá en la agenda", "cargá en agenda", "cargame en la agenda",
+            "cargar en google", "cargá en google", "cargame en google",
+            "cargar en el calendar", "cargá en el calendar", "cargame en el calendar"
+        ])
+    )
+
+    if es_pregunta_agenda and not tiene_verbo_crear_agenda:
+        return None
+    if ("?" in t or "¿" in t) and not tiene_verbo_crear_agenda:
+        return None
+
+    # Si habla explícitamente de "tarea(s)" sin mencionar reunión/evento/meet/llamada/visita/turno, dejarlo a compromisos
+    menciona_evento_cal = any(w in t for w in ["reunion", "reunión", "evento", "meet", "call", "llamada", "visita", "turno", "cita"])
+    if re.search(r"\btareas?\b", t) and not menciona_evento_cal:
+        return None
+
+    # Si parece carga de horas/ticket (ej: "Cargué 1 hora en Pasina por reunión") y no menciona calendar/agenda/agendar, no es evento
+    es_carga_horas = (
+        any(w in t.split() for w in ["cargue", "cargué", "hice", "estuve", "trabaje", "trabajé", "labure", "laburé", "dedique", "dediqué"])
+        and any(u in t for u in ["hora", "horas", "hs", "min", "minuto", "minutos"])
+        and detectar_cliente(t) is not None
+        and not any(c in t for c in ["agend", "calendar", "calendario", "agenda"])
+    )
+    if es_carga_horas:
+        return None
+
+    # Requiere intención explícita de agendar/crear evento
+    patron_crear = (
+        r"\b(agend(?:á(?:me|te|lo|la)?|a(?:me|te|lo|la)|ar)|"
+        r"(?:cargar|carg[aá]|cargame|registrar|registr[aá]|registrame|anotar|anot[aá]|anotame|poner|poneme|sumar|sum[aá]|sumame|crear|cre[aá]|programar|program[aá]|armar|arm[aá])\s+(?:un[ao]?\s+)?(?:reuni[oó]n|evento|llamada|meet|call|visita|turno|cita)|"
+        r"(?:cargar|carg[aá]|cargame|registrar|registr[aá]|registrame|anotar|anot[aá]|anotame|poner|poneme|sumar|sum[aá]|sumame)\s+(?:en\s+(?:el\s+|la\s+)?|a\s+(?:la\s+)?)?(?:agenda|calendario|google\s+calend(?:ar|er)|calendar)|"
+        r"(?:tengo|tenemos)\s+(?:un[ao]?\s+)?(?:reuni[oó]n|meet|call|visita|turno|cita)|"
+        r"(?:reuni[oó]n|meet|call|visita)\s+(?:con\s+\w+\s+)?(?:para\s+)?(?:hoy|mañana|manana|pasado|el\s+\w+|a\s+las\s+\w+|\d{1,2}\s*hs))\b"
+    )
+    menciona_calendar_y_accion = (
+        (
+            any(cal_w in t for cal_w in ["google calendar", "google calender", "calendario", "calendar", "en la agenda", "a la agenda"])
+            or menciona_evento_cal
+        )
+        and tiene_verbo_crear_agenda
+        and ("?" not in t and "¿" not in t)
+    )
+    if not re.search(patron_crear, t) and not menciona_calendar_y_accion:
+        return None
+
+    # Si es solo una palabra suelta sin datos
+    if t.strip() in ["agenda", "agendar", "crear evento", "reunion", "reunión"]:
+        return None
+
+    # 1. Determinar Fecha y Hora
+    target_date = _extraer_fecha_evento(t, ahora)
+    hora, minuto = _extraer_hora_evento(t)
     start_dt = tz.localize(datetime.combine(target_date, time(hora, minuto)))
 
-    # 3. Duración
+    # 2. Duración
     duracion = 60
     m_dur = re.search(r"(\d+)\s*(?:min|minutos)", t)
     if m_dur:
         duracion = int(m_dur.group(1))
 
-    # 4. Título
+    # 3. Título limpio
     clean_title = user_text
-    for prefix in [
-        "quiero cargar la agenda de google", "quiero cargar en la agenda", "cargar la agenda de google",
-        "cargar en la agenda", "cargar a la agenda", "cargar la agenda", "cargar agenda",
-        "Agendá reunión", "agendá reunión", "Agendame reunión", "agendame reunión",
-        "Agendar reunión", "agendar reunión", "Agendá llamada", "agendá llamada",
-        "Agendame llamada", "agendame llamada", "Agendá", "agendá", "Agendame", "agendame",
-        "Agendar", "agendar", "agendate", "Crear evento", "crear evento",
-        "Anotar reunión", "anotar reunion", "anotame reunion", "sumar a la agenda", "poner en la agenda"
-    ]:
+    clean_title = re.sub(
+        r"(?i)^(?:hola|buenas|che|por\s+favor|porfa)[,.:;\s]*",
+        "",
+        clean_title
+    )
+    clean_title = re.sub(
+        r"(?i)\b(?:quiero|necesito|pod[eé]s|me\s+pod[eé]s|quisiera)\s+",
+        "",
+        clean_title
+    )
+    frases_quitar = [
+        "en el google calendar", "en google calendar", "en el google calender", "en google calender",
+        "al google calendar", "en el calendar", "en calendar", "en el calendario", "al calendario",
+        "la agenda de google", "en la agenda", "a la agenda", "la agenda",
+        "por favor", "porfa",
+        "agendá reunión", "agendame reunión", "agendar reunión", "agendá una reunión", "agendame una reunión",
+        "agendá llamada", "agendame llamada", "agendame", "agendate", "agendá", "agendar",
+        "registrame una reunión", "registra una reunión", "registrá una reunión", "registrar una reunión",
+        "registrame", "registrá", "registrar",
+        "anotame una reunión", "anotar reunión", "anotame", "anotá", "anotar",
+        "poneme una reunión", "poneme", "poner en la agenda", "sumar a la agenda",
+        "crear evento", "creá evento", "programar reunión", "programá reunión"
+    ]
+    for prefix in sorted(frases_quitar, key=len, reverse=True):
         clean_title = re.sub(rf"(?i)\b{re.escape(prefix)}\b", "", clean_title)
 
+    meses_pat = "|".join(MESES_NOMBRE.keys())
+    horas_pat = "|".join(sorted(HORAS_PALABRAS.keys(), key=len, reverse=True))
     clean_title = re.sub(
-        r"(?i)\b(mañana|manana|hoy|pasado mañana|pasado manana|el lunes|el martes|el miercoles|el miércoles|el jueves|el viernes|el sabado|el sábado|el domingo|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo|a las \d{1,2}(?::\d{2})?\s*(?:hs)?|\d{1,2}(?::\d{2})?\s*hs)\b", 
-        "", 
+        rf"(?i)\b(?:para\s+)?(?:el\s+)?(?:pasado\s+mañana|pasado\s+manana|mañana|manana|hoy|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo|\d{{1,2}}\s+de\s+(?:{meses_pat})(?:\s+de\s+\d{{4}})?|\d{{1,2}}[/.-]\d{{1,2}}(?:[/.-]\d{{2,4}})?)\b",
+        "",
+        clean_title
+    )
+    clean_title = re.sub(
+        rf"(?i)\b(?:(?:a\s+las|las)\s+(?:\d{{1,2}}(?:[:.]\d{{2}})?|{horas_pat})(?:\s*(?:hs|hrs|h))?|\d{{1,2}}(?:[:.]\d{{2}})?\s*(?:hs|hrs|h))\b(?:\s*(?:y\s+media|y\s+cuarto|menos\s+cuarto))?(?:\s*(?:de\s+la\s+tarde|a\s+la\s+tarde|por\s+la\s+tarde|de\s+la\s+mañana|a\s+la\s+mañana|de\s+la\s+noche|a\s+la\s+noche|del\s+mediod[ií]a|pm|am))?",
+        "",
         clean_title
     )
     clean_title = re.sub(r"\s+", " ", clean_title).strip()
-    clean_title = re.sub(r"^[\s,.-]+", "", clean_title)
-    
+    clean_title = re.sub(r"^[\s,.-]+|[\s,.-]+$", "", clean_title)
+    clean_title = re.sub(r"(?i)^(?:para|una|un|de|a\s+las|las)\s+", "", clean_title).strip()
+
     if clean_title.lower().startswith("con "):
         clean_title = "Reunión " + clean_title
     elif not clean_title or len(clean_title) < 3:
@@ -533,11 +637,13 @@ def parsear_crear_evento(t: str, user_text: str, ahora: datetime, tz) -> Optiona
     }
 
 def parsear_compromisos(t: str, user_text: str, ahora: datetime) -> Optional[Dict[str, Any]]:
-    """Detecta carga, consulta o completitud de compromisos/tareas diarias (Horizonte)."""
-    # 1. Completar o tachar tarea: ej "marcar como hecha tarea 3", "completar tarea 3", "tarea 3 lista"
+    """Detecta carga, consulta o completitud de compromisos/tareas diarias (Horizonte), permitiendo asignar tareas entre consultores."""
+    # 1. Completar o tachar tarea: ej "marcar como hecha tarea 3", "completar tarea 3", "tarea 3 lista", "/completar 3"
     m_comp = re.search(r"(?:completar|marcar\s+(?:como\s+)?hecha|cerrar|liquidar|termin(?:ar|é|e))\s+(?:la\s+)?tarea\s*#?\s*(\d+)", t)
     if not m_comp:
-        m_comp = re.search(r"tarea\s*#?\s*(\d+)\s*(?:lista|hecha|completada|terminada|ok)", t)
+        m_comp = re.search(r"tarea\s*#?\s*(\d+)\s*(?:lista|hecha|completada|terminada|ok|check)", t)
+    if not m_comp:
+        m_comp = re.match(r"^/completar\s*#?(\d+)$", t)
     if m_comp:
         return {
             "intencion": "COMPLETAR_COMPROMISO",
@@ -546,29 +652,60 @@ def parsear_compromisos(t: str, user_text: str, ahora: datetime) -> Optional[Dic
             }
         }
 
+    # Detectar destinatario objetivo si se menciona explícitamente a Juan Luis o Melani
+    destinatario = None
+    if re.search(r"(?:\b(?:a|para|de)\s+|/tarea\s+(?:a\s+|para\s+)?)(?:juan\s*luis|juan|jl|al\s+jefe|el\s+jefe)\b", t) or \
+       re.search(r"\b(?:dejale|dejarle|anotale|cargale|pasale|ponele|ponéle)\s+(?:a\s+)?(?:juan\s*luis|juan|jl|al\s+jefe|el\s+jefe)\b", t):
+        destinatario = "JUANLUIS"
+    elif re.search(r"(?:\b(?:a|para|de)\s+|/tarea\s+(?:a\s+|para\s+)?)(?:melani|meli|la\s+colaboradora)\b", t) or \
+         re.search(r"\b(?:dejale|dejarle|anotale|cargale|pasale|ponele|ponéle)\s+(?:a\s+)?(?:melani|meli)\b", t):
+        destinatario = "MELANI"
+
     # 2. Carga de compromisos
     patrones_carga = [
+        # Asignación directa a alguien
+        r"(?:dejale|dejarle|asignale|asignarle|anotale|anotarle|cargale|cargarle|pasale|pasarle|ponele|ponéle)\s+(?:una\s+)?tareas?\s+(?:a|para)\s+(?:juan\s*luis|juan|jl|el\s+jefe|melani|meli)[\s:]*",
+        r"(?:dejale|dejarle|anotale|anotarle|cargale|cargarle|pasale|pasarle|ponele|ponéle)\s+(?:a|para)\s+(?:juan\s*luis|juan|jl|el\s+jefe|melani|meli)\s+(?:la\s+tarea|las\s+tareas)?[\s:]*",
+        r"(?:tarea|tareas|nueva\s+tarea)\s+(?:para|a)\s+(?:juan\s*luis|juan|jl|el\s+jefe|melani|meli)[\s:]*",
+        # Carga por fecha / general
         r"(?:tareas?|compromisos?|pendientes?|horizonte)\s+para\s+(?:el\s+)?(mañana|manana|hoy|pasado mañana|pasado manana)[\s:]*",
         r"(?:tareas?|compromisos?|pendientes?)\s+de\s+(?:el\s+)?(mañana|manana|hoy|pasado mañana|pasado manana)[\s:]*",
-        r"(?:anota(?:r|me)?|guardar?)\s+(?:para\s+)?(mañana|manana|hoy|pasado mañana|pasado manana)\s+(?:las\s+)?(?:tareas?|compromisos?|pendientes?)?[\s:]*",
-        r"(?:tengo\s+que\s+(?:hacer|sacar)|sacar\s+s[ií]\s+o\s+s[ií])\s+(?:para\s+)?(mañana|manana|hoy|pasado mañana|pasado manana)[\s:]*",
+        r"(?:anota(?:r|me|le)?|guardar?|cargar?)\s+(?:para\s+)?(mañana|manana|hoy|pasado mañana|pasado manana)\s+(?:las\s+)?(?:tareas?|compromisos?|pendientes?)?[\s:]*",
+        r"(?:anota(?:r|me|le)?|guardar?|cargar?)\s+(?:una\s+)?(?:tarea|compromiso|pendiente)[\s:]*",
+        r"(?:tengo\s+que\s+(?:hacer|sacar)|sacar\s+s[ií]\s+o\s+s[ií]|hay\s+que\s+hacer)\s+(?:para\s+)?(mañana|manana|hoy|pasado mañana|pasado manana)?[\s:]*",
+        r"^/tarea\b[\s:]*"
     ]
     
-    match_carga = None
-    fecha_palabra = "mañana"
+    match_carga = False
+    fecha_palabra = "hoy"
     sub_text = ""
 
-    for pat in patrones_carga:
-        m = re.search(pat, t)
-        if m:
-            match_carga = m
-            fecha_palabra = m.group(1).lower()
-            pos_end = m.end()
-            sub_text = user_text[pos_end:].strip()
-            break
+    # Caso comando /tarea
+    if t.startswith("/tarea ") or t.startswith("/tarea:"):
+        match_carga = True
+        sub_text = re.sub(r"^/tarea\s+(?:(?:a|para)\s+)?(?:juan\s*luis|juan|jl|el\s+jefe|melani|meli)\s*", "", user_text, flags=re.IGNORECASE)
+        sub_text = re.sub(r"^/tarea\s*", "", sub_text, flags=re.IGNORECASE).strip()
+        if ":" in sub_text:
+            sub_text = sub_text.split(":", 1)[1].strip()
 
     if not match_carga:
-        if t.startswith("tareas:") or t.startswith("tareas para mañana") or t.startswith("tareas para manana") or t.startswith("tareas mañana:"):
+        for pat in patrones_carga:
+            m = re.search(pat, t)
+            if m:
+                match_carga = True
+                try:
+                    fp = m.group(1).lower()
+                    if fp: fecha_palabra = fp
+                except Exception:
+                    pass
+                pos_end = m.end()
+                sub_text = user_text[pos_end:].strip()
+                if sub_text.startswith(":") or sub_text.startswith("-"):
+                    sub_text = sub_text[1:].strip()
+                break
+
+    if not match_carga:
+        if t.startswith("tareas:") or t.startswith("tareas para mañana") or t.startswith("tareas para manana") or t.startswith("tareas de hoy:") or t.startswith("tareas hoy:"):
             if "mañana" in t or "manana" in t:
                 fecha_palabra = "mañana"
             else:
@@ -578,13 +715,18 @@ def parsear_compromisos(t: str, user_text: str, ahora: datetime) -> Optional[Dic
                 match_carga = True
                 sub_text = parts[1].strip()
 
+    # Si encontramos sub_text para cargar
     if match_carga and sub_text:
-        if "pasado" in fecha_palabra:
+        # Detectar fecha en sub_text si dice "para mañana" o similar
+        if "pasado" in fecha_palabra or "pasado mañana" in t or "pasado manana" in t:
             fecha_obj = (ahora + timedelta(days=2)).date()
-        elif "mañana" in fecha_palabra or "manana" in fecha_palabra:
+        elif "mañana" in fecha_palabra or "manana" in fecha_palabra or "para mañana" in t or "para manana" in t:
             fecha_obj = (ahora + timedelta(days=1)).date()
         else:
             fecha_obj = ahora.date()
+
+        # Limpiar prefijos residuales como "de", "que", etc.
+        sub_text = re.sub(r"^(?:de|que|es)\s+", "", sub_text, flags=re.IGNORECASE).strip()
 
         lineas = [l.strip() for l in sub_text.split("\n") if l.strip()]
         tareas_extraidas = []
@@ -619,7 +761,8 @@ def parsear_compromisos(t: str, user_text: str, ahora: datetime) -> Optional[Dic
                 "intencion": "REGISTRAR_COMPROMISOS",
                 "datos": {
                     "fecha_objetivo": fecha_obj.isoformat(),
-                    "tareas": tareas_extraidas
+                    "tareas": tareas_extraidas,
+                    "destinatario": destinatario
                 }
             }
 
@@ -630,12 +773,16 @@ def parsear_compromisos(t: str, user_text: str, ahora: datetime) -> Optional[Dic
             "mis tareas", "tareas de hoy", "tareas para hoy", "tareas para mañana", "tareas para manana",
             "tareas de mañana", "tareas de manana", "compromisos de hoy", "compromisos para hoy",
             "compromisos de mañana", "compromisos de manana", "compromisos para mañana", "compromisos para manana",
-            "que tengo que hacer", "qué tengo que hacer", "que tengo pendiente", "qué tengo pendiente",
+            "que tengo que hacer", "qué tengo que hacer", "que tenemos que hacer", "qué tenemos que hacer",
+            "que tengo pendiente", "qué tengo pendiente", "que tenemos pendiente", "qué tenemos pendiente",
             "que tengo para hoy", "qué tengo para hoy", "que tenemos para hoy", "qué tenemos para hoy",
-            "que tengo hoy", "qué tengo hoy",
+            "que tengo hoy", "qué tengo hoy", "que hay para hoy", "qué hay para hoy",
             "que tengo para mañana", "qué tengo para mañana", "que tenemos para mañana", "qué tenemos para mañana",
             "que hay que sacar", "qué hay que sacar", "cuales son mis tareas", "cuáles son mis tareas",
-            "ver tareas", "ver compromisos", "mostrar tareas", "mostrar compromisos"
+            "ver tareas", "ver compromisos", "mostrar tareas", "mostrar compromisos", "lista de tareas",
+            "tareas pendientes", "pendientes de hoy", "pendientes para hoy",
+            "tareas de juan luis", "tareas de juan", "tareas del jefe", "tareas de melani",
+            "que tiene que hacer juan", "que tiene que hacer melani", "que tiene juan", "que tiene melani"
         ])
     )
     if es_consulta_tareas:
@@ -643,12 +790,23 @@ def parsear_compromisos(t: str, user_text: str, ahora: datetime) -> Optional[Dic
             f_obj = (ahora + timedelta(days=1)).date()
         else:
             f_obj = ahora.date()
+
+        # Determinar si filtra por alguien específico o ambos
+        filtro = None
+        if "mis tareas" in t or "que tengo" in t or "tengo que hacer" in t:
+            filtro = "MIO"
+        elif destinatario:
+            filtro = destinatario
+
         return {
             "intencion": "CONSULTAR_COMPROMISOS",
             "datos": {
-                "fecha_objetivo": f_obj.isoformat()
+                "fecha_objetivo": f_obj.isoformat(),
+                "consultor_filtro": filtro
             }
         }
+
+    return None
 
     return None
 
@@ -727,15 +885,15 @@ class AIService:
                 "datos": {}
             }
 
-        # 0.1 COMPROMISOS / TAREAS DIARIAS (HORIZONTE)
-        comp = parsear_compromisos(t, user_text, ahora)
-        if comp:
-            return comp
-
-        # 1. AGENDAR EN GOOGLE CALENDAR
+        # 0.1 AGENDAR EN GOOGLE CALENDAR (antes de compromisos para no confundir "anotame reunión mañana" con tarea)
         evento_calendar = parsear_crear_evento(t, user_text, ahora, tz)
         if evento_calendar:
             return evento_calendar
+
+        # 0.2 COMPROMISOS / TAREAS DIARIAS (HORIZONTE)
+        comp = parsear_compromisos(t, user_text, ahora)
+        if comp:
+            return comp
 
         # 2. Detectar cliente si está en el texto
         cliente_detectado = detectar_cliente(t)
@@ -777,6 +935,7 @@ class AIService:
         # 4. AGENDA / CALENDARIO (CONSULTAR)
         es_consulta_agenda = (
             any(re.search(rf"\b{re.escape(w)}\b", t) for w in ["agenda", "calendario", "reuniones", "turnos", "compromisos"]) or
+            (es_pregunta and any(re.search(rf"\b{re.escape(w)}\b", t) for w in ["reunion", "reunión"])) or
             any(p in t for p in [
                 "que hay hoy", "qué hay hoy", "que tenemos hoy", "qué tenemos hoy", "como viene hoy", "cómo viene hoy",
                 "que hay mañana", "qué hay mañana", "que tenemos mañana", "qué tenemos mañana", "como viene mañana", "cómo viene mañana",
@@ -1004,14 +1163,59 @@ class AIService:
         # 11. Fallback conversacional
         return {
             "intencion": "CONVERSACION_GENERAL",
-            "datos": {},
-            "respuesta_amigable": (
-                "👋 ¡Hola! Podés preguntarme lo que necesites, por ejemplo:\n"
-                "• *\"¿Qué se hizo en Montarfe este mes?\"*\n"
-                "• *\"¿Cuántas horas hicimos ayer?\"* o *\"¿Cuántas horas en el mes?\"*\n"
-                "• *\"¿Qué se hizo con los padrones?\"*\n"
-                "• *\"Cargá 2 horas en Pasina por soporte...\"*"
-            )
+            "datos": {
+                "texto_original": user_text
+            }
         }
+
+    def responder_conversacion_ia(self, user_text: str, user_name: str = "Melani") -> str:
+        """Genera una respuesta conversacional natural, descontracturada y con onda argentina usando Gemini."""
+        nombre_amigable = "Melani" if "MELANI" in user_name.upper() else ("Juan Luis" if "JUAN" in user_name.upper() else user_name)
+        if not settings.GEMINI_API_KEY:
+            return f"¡Buenas {nombre_amigable}! 👋 Todo tranqui por acá. Decime nomás si cargamos horas, tareas o chequeamos la agenda."
+        try:
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            
+            system_prompt = (
+                "Sos el asistente virtual del equipo Grandi (Melani y Juan Luis). "
+                "Tu personalidad es relajada, simpática, descontracturada y muy compañera, con tono argentino natural (usás voseo: 'dale', 'che', 'joya', 'de una', 'tranqui', 'decime', '¡buenas!'). "
+                "Respondé de forma concisa, cálida y directa (máximo 1 o 2 oraciones breves, sin rodeos ni parrafadas). "
+                "NUNCA hables como un robot ni menciones tablas de base de datos como 'bd_dashboard_servicios' ni 'USER'. "
+                f"Estás hablando con {nombre_amigable}. "
+                "Si te saludan, te agradecen o te hacen charla, respondé con buena onda y deciles que estás listo para darles una mano con lo que haga falta (horas, tareas, reuniones o clientes)."
+            )
+            
+            modelos = ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3-flash-preview"]
+            for m in modelos:
+                try:
+                    res = client.models.generate_content(
+                        model=m,
+                        contents=[user_text],
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_prompt,
+                            thinking_config=types.ThinkingConfig(thinking_budget=0),
+                            temperature=0.7,
+                            max_output_tokens=150
+                        )
+                    )
+                    texto_out = ""
+                    if res and res.candidates:
+                        for c in res.candidates:
+                            if c.content and c.content.parts:
+                                for p in c.content.parts:
+                                    if getattr(p, "text", None):
+                                        texto_out += p.text
+                    if not texto_out and res and getattr(res, "text", None):
+                        texto_out = res.text
+                    if texto_out and texto_out.strip():
+                        return texto_out.strip()
+                except Exception as model_err:
+                    logger.debug(f"Error con modelo {m}: {model_err}")
+            return f"¡Buenas {nombre_amigable}! 👋 Todo tranqui por acá. Decime qué necesitás y lo vemos al toque."
+        except Exception as e:
+            logger.error(f"Error generando respuesta conversacional: {e}")
+            return f"¡Buenas {nombre_amigable}! Decime nomás en qué te doy una mano."
 
 ai_service = AIService()

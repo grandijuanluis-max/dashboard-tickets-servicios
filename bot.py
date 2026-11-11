@@ -1,4 +1,7 @@
+import os
 import logging
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, time, date, timedelta
 from typing import Optional, Dict, Any, List
 import pytz
@@ -46,6 +49,35 @@ async def safe_reply(update_or_message, text: str, parse_mode=ParseMode.MARKDOWN
         clean_text = text.replace("*", "").replace("_", "").replace("`", "")
         return await msg.reply_text(clean_text, reply_markup=reply_markup)
 
+async def send_group_safe(bot, chat_id, text: str, parse_mode=ParseMode.MARKDOWN):
+    """Envía un mensaje programado al grupo intentando Markdown y haciendo fallback a texto plano si falla."""
+    try:
+        return await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+    except Exception as e:
+        logger.warning(f"Error enviando mensaje Markdown al grupo {chat_id}, reintentando en texto plano: {e}")
+        clean_text = text.replace("*", "").replace("_", "").replace("`", "")
+        return await bot.send_message(chat_id=chat_id, text=clean_text)
+
+def _format_calendar_create_error() -> str:
+    """Devuelve un mensaje claro explicando por qué falló la creación del evento en Google Calendar."""
+    err = calendar_service.last_errors.get("create", "")
+    err_l = err.lower()
+    if "invalid_grant" in err_l or "jwt" in err_l:
+        return (
+            "⚠️ *No pude agendar en Google Calendar porque la clave de acceso (`credentials.json`) fue revocada o es inválida (`Invalid JWT Signature`).*\n\n"
+            "👉 Hay que generar una nueva clave JSON para la Service Account en Google Cloud Console y reemplazar `credentials.json`."
+        )
+    if "403" in err_l or "forbidden" in err_l or "writer" in err_l or "requiredaccesslevel" in err_l:
+        return (
+            "⚠️ *No tengo permisos de escritura en Google Calendar.*\n\n"
+            "👉 Compartí el calendario con el email de la Service Account (`credentials.json`) con el permiso *\"Realizar cambios en eventos\"*."
+        )
+    if "404" in err_l or "notfound" in err_l:
+        return "⚠️ *No se encontró el calendario configurado en `GOOGLE_CALENDAR_ID` o no está compartido con la Service Account.*"
+    if "no inicializado" in err_l:
+        return "⚠️ *Google Calendar no está conectado porque falta un `credentials.json` válido.*"
+    return "⚠️ Che, no pude guardar la reunión en Google Calendar. Probemos de nuevo."
+
 # --- COMANDOS BÁSICOS ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -56,27 +88,30 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     consultor_db = db.get_consultant_by_telegram_id(user.id)
     
     if consultor_db:
-        nombre = consultor_db.get("consultor", user.first_name)
+        c_raw = str(consultor_db.get("consultor", "")).upper()
+        nombre = "Melani" if "MELANI" in c_raw else ("Juan Luis" if "JUAN" in c_raw else consultor_db.get("consultor", user.first_name))
         mensaje = (
-            f"👋 ¡Hola, *{nombre}*!\n\n"
-            f"Ya estás conectado al sistema de tickets (*bd_dashboard_servicios*) como `{consultor_db.get('rol', 'USER')}`.\n\n"
-            f"📌 *¿Cómo usar el asistente?*\n"
-            f"• *Cargar ticket:* Escribime o mandame una *nota de voz* 🎙️, ej:\n"
-            f"  _\"Cargá 1 hora y media en Pasina por problema en facturación electrónica\"_\n"
-            f"• *Agendar en Google Calendar:* _\"Agendá reunión mañana a las 11hs con Palaversich\"_\n"
-            f"• *Ver agenda y tickets:* `/hoy` (separados claramente en dos tarjetas con botones)\n"
-            f"• *Ver horas del día:* `/horas`\n"
-            f"• *Ranking y demanda de clientes:* `/ranking`  _(o preguntá \"¿Qué cliente demandó más este año?\")_\n"
-            f"• *Deshacer / Borrar último ticket:* `/borrar_ultimo` o botón directo\n"
-            f"• *Consultores disponibles:* `/consultores`"
+            f"👋 ¡Buenas, *{nombre}*! ¿Cómo va todo?\n\n"
+            f"Acá estoy para darte una mano con el día a día del equipo. Podés hablarme o mandarme audios 🎙️ bien tranqui:\n\n"
+            f"• *Cargar horas:* _\"Cargué 1h y media en Pasina por facturación electrónica\"_\n"
+            f"• *Tareas compartidas:* `/tareas` o decime:\n"
+            f"  _\"Dejale una tarea a Juan Luis: llamar a Cargill\"_\n"
+            f"  _\"Anotale a Melani: revisar facturas de Presea\"_\n"
+            f"  _\"Tareas de hoy: 1. Llamar cliente 2. Enviar reporte\"_\n"
+            f"• *Google Calendar:* _\"Agendá reunión mañana a las 11hs con Palaversich\"_\n"
+            f"• *Ver agenda y horas de hoy:* `/hoy`\n"
+            f"• *Consultar horas:* `/horas` o _\"¿Cuántas horas metimos ayer?\"_\n"
+            f"• *Clientes:* `/ranking` o _\"¿Qué cliente demandó más este año?\"_\n"
+            f"• *Deshacer último ticket:* `/borrar_ultimo`\n\n"
+            f"¡Cualquier cosa que necesites, decime nomás!"
         )
     else:
         mensaje = (
             f"👋 ¡Hola, *{user.first_name}*!\n\n"
-            f"Tu Telegram ID es: `{user.id}`\n\n"
-            f"⚠️ Para poder registrar tickets a tu nombre, vinculá tu cuenta usando tu nombre de consultor registrado en el sistema:\n"
-            f"`/vincular TU_NOMBRE`  _(ej: `/vincular MELANI` o `/vincular JUAN LUIS`)_\n\n"
-            f"Una vez vinculado, todos los tickets que cargues por acá aparecerán automáticamente en el dashboard."
+            f"Tu ID de Telegram es: `{user.id}`\n\n"
+            f"Para conectarte con el equipo, vinculate con tu nombre:\n"
+            f"`/vincular MELANI` o `/vincular JUAN LUIS`\n\n"
+            f"¡Apenas lo hagas ya arrancamos!"
         )
     await update.message.reply_text(mensaje, parse_mode=ParseMode.MARKDOWN)
 
@@ -192,6 +227,16 @@ async def responder_agenda(
             start_str = ev['start']
             hora = start_str.split("T")[1][:5] if "T" in start_str else "Todo el día"
             texto_cal += f"• ⏰ `{hora}` — *{ev['summary']}*\n"
+    elif calendar_service.last_errors:
+        texto_cal += "⚠️ *Aviso de sincronización:* Hubo un error al conectar con Google Calendar.\n"
+        for cid, err in calendar_service.last_errors.items():
+            if "invalid_grant" in err.lower() or "jwt" in err.lower():
+                texto_cal += f"• `{cid}`: Clave de credenciales (`credentials.json`) revocada o desincronizada en Google Cloud.\n"
+            elif "notfound" in err.lower() or "404" in err:
+                texto_cal += f"• `{cid}`: Calendario no encontrado o no compartido con la Service Account.\n"
+            else:
+                texto_cal += f"• `{cid}`: {err[:60]}...\n"
+        texto_cal += "_(Revisá el archivo credentials.json o los permisos del calendario)._\n"
     else:
         texto_cal += f"• _No hay eventos agendados en el calendario para {etiqueta.lower()}._\n"
 
@@ -681,25 +726,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
         if ticket:
             hs = minutos / 60.0
             id_t = ticket.get('id_ticket')
+            c_tag = str(ticket.get('consultor') or consultor_asignado).upper()
+            c_tag_clean = "Melani" if "MELANI" in c_tag else ("Juan Luis" if "JUAN" in c_tag else c_tag)
             resp = (
-                f"✅ *Ticket #{id_t} guardado en el Dashboard*\n\n"
-                f"👤 *Consultor:* {ticket.get('consultor') or consultor_asignado}\n"
-                f"🏢 *Cliente:* {ticket.get('clientes')}\n"
-                f"⏱️ *Tiempo:* `{hs:.2f} hs` ({minutos} min)\n"
-                f"📁 *Módulo:* {ticket.get('modulo')}\n"
+                f"✅ *¡Anotadísimo! Cargué `{hs:.2f} hs` en {ticket.get('clientes')}*\n\n"
+                f"👤 *Para:* {c_tag_clean}\n"
                 f"📝 *Detalle:* {ticket.get('consultas')}\n"
-                f"📞 *Atención:* {ticket.get('atencion')}"
+                f"📁 *Módulo:* {ticket.get('modulo')} _(Ticket #{id_t})_"
             )
-            kb = [[InlineKeyboardButton("🗑️ Deshacer / Borrar Ticket", callback_data=f"borrar_ticket_{id_t}")]]
+            kb = [[InlineKeyboardButton("🗑️ Deshacer / Borrar", callback_data=f"borrar_ticket_{id_t}")]]
             await safe_reply(update, resp, reply_markup=InlineKeyboardMarkup(kb))
         else:
-            resp = "❌ Ocurrió un error al guardar el ticket en Supabase. Verificá los logs de conexión."
+            resp = "⚠️ Che, hubo un temita al guardar las horas en la base. Probá de nuevo en un ratito."
             await safe_reply(update, resp)
 
     elif intencion == "BORRAR_ULTIMO_TICKET":
         ultimo = db.get_last_ticket_by_consultant(consultor_nombre)
         if not ultimo:
-            await safe_reply(update, "⚠️ No encontré ningún ticket tuyo reciente para eliminar.")
+            await safe_reply(update, "⚠️ No encontré ningún ticket tuyo reciente para borrar.")
             return
 
         id_t = ultimo.get("id_ticket")
@@ -707,13 +751,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
         if ok:
             await safe_reply(
                 update,
-                f"🗑️ *Ticket #{id_t} eliminado correctamente del Dashboard*\n"
-                f"🏢 *Cliente:* {ultimo.get('clientes')}\n"
-                f"⏱️ *Tiempo:* `{ultimo.get('tiempo_res')} min`\n"
-                f"📝 *Detalle:* {ultimo.get('consultas')}"
+                f"🗑️ *Listo, ya borré el ticket #{id_t} de {ultimo.get('clientes')}.*\n"
+                f"⏱️ Eran `{ultimo.get('tiempo_res')} min` en _{ultimo.get('consultas')}_."
             )
         else:
-            await safe_reply(update, f"❌ No se pudo eliminar el ticket #{id_t}.")
+            await safe_reply(update, f"⚠️ Che, no pude borrar el ticket #{id_t}.")
 
     elif intencion == "CREAR_EVENTO":
         titulo = datos.get("titulo", "Reunión")
@@ -773,48 +815,58 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
                 link = evento.get("htmlLink", "")
                 link_text = f"\n🔗 [Ver en Google Calendar]({link})" if link else ""
                 resp = (
-                    f"📅 *Evento creado en Google Calendar*\n\n"
-                    f"📌 *Título:* {titulo}\n"
-                    f"⏰ *Fecha y Hora:* {start_dt.strftime('%d/%m/%Y %H:%M')}\n"
+                    f"📅 *¡Reunión agendada! Nos vemos ahí:*\n\n"
+                    f"📌 *{titulo}*\n"
+                    f"🗓️ *Cuándo:* {start_dt.strftime('%d/%m/%Y')} a las `{start_dt.strftime('%H:%M')} hs`\n"
                     f"⏳ *Duración:* {duracion} min{link_text}"
                 )
             else:
-                resp = "❌ No se pudo crear el evento en Google Calendar. Verificá las credenciales de la Service Account."
+                resp = _format_calendar_create_error()
         except Exception as e:
             logger.error(f"Error parseando fecha de evento: {e}")
-            resp = "⚠️ No pude determinar con exactitud la fecha y hora. Intentá indicándola claramente (ej: 'mañana a las 15hs')."
+            resp = "⚠️ No llegué a entender bien el día y la hora. Decime por ejemplo: _'Agendá mañana a las 11hs con Palaversich'_."
 
         await safe_reply(update, resp)
 
     elif intencion == "REGISTRAR_COMPROMISOS":
         fecha_obj_str = datos.get("fecha_objetivo")
         tareas = datos.get("tareas", [])
+        destinatario = (datos.get("destinatario") or consultor_nombre).strip().upper()
         try:
             fecha_obj = datetime.fromisoformat(fecha_obj_str).date()
         except Exception:
-            fecha_obj = datetime.now(pytz.timezone(settings.TIMEZONE)).date() + timedelta(days=1)
+            fecha_obj = datetime.now(pytz.timezone(settings.TIMEZONE)).date()
 
         guardadas = []
         for t_item in tareas:
             c = db.crear_compromiso(
-                consultor=consultor_nombre,
+                consultor=destinatario,
                 tarea=t_item,
                 fecha_objetivo=fecha_obj,
-                origen="telegram"
+                origen=f"telegram:{consultor_nombre}"
             )
             if c:
                 guardadas.append(c)
 
         if guardadas:
             dia_txt = "mañana" if fecha_obj > datetime.now(pytz.timezone(settings.TIMEZONE)).date() else "hoy"
-            resp = f"🎯 *Compromisos guardados para {dia_txt} ({fecha_obj.strftime('%d/%m/%Y')}):*\n\n"
+            fecha_fmt = fecha_obj.strftime('%d/%m/%Y')
+
+            dest_nombre = "Juan Luis" if "JUAN" in destinatario else ("Melani" if "MELANI" in destinatario else destinatario)
+            cons_nombre = "Juan Luis" if "JUAN" in consultor_nombre.upper() else ("Melani" if "MELANI" in consultor_nombre.upper() else consultor_nombre)
+
+            if destinatario != consultor_nombre.upper():
+                resp = f"🎯 *Tarea asignada a {dest_nombre} (por {cons_nombre}) — para {dia_txt} ({fecha_fmt}):*\n\n"
+            else:
+                resp = f"🎯 *Compromiso guardado para vos ({dest_nombre}) — para {dia_txt} ({fecha_fmt}):*\n\n"
+
             keyboard = []
             for item in guardadas:
                 resp += f"• *#{item['id']}* {item['tarea']}\n"
                 keyboard.append([
                     InlineKeyboardButton(f"✅ #{item['id']} {item['tarea'][:25]}", callback_data=f"completar_tarea_{item['id']}")
                 ])
-            resp += f"\n_Podés marcarlas como listas tocando los botones o diciendo 'tarea [número] lista'._"
+            resp += f"\n_Podés marcarla como lista tocando el botón ✅ o diciendo 'tarea #{guardadas[0]['id']} lista'._"
             reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
             await safe_reply(update, resp, reply_markup=reply_markup)
         else:
@@ -822,45 +874,84 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
 
     elif intencion == "CONSULTAR_COMPROMISOS":
         fecha_obj_str = datos.get("fecha_objetivo")
+        filtro_cons = datos.get("consultor_filtro")
         try:
             fecha_obj = datetime.fromisoformat(fecha_obj_str).date()
         except Exception:
             fecha_obj = datetime.now(pytz.timezone(settings.TIMEZONE)).date()
 
+        if filtro_cons == "MIO":
+            target_cons = consultor_nombre
+        elif filtro_cons in ["JUANLUIS", "MELANI"]:
+            target_cons = filtro_cons
+        else:
+            target_cons = None
+
         pendientes = db.obtener_compromisos(
-            consultor=consultor_nombre if not es_jefe else None,
+            consultor=target_cons,
             fecha_objetivo=fecha_obj,
             estado="pendiente"
         )
         completadas = db.obtener_compromisos(
-            consultor=consultor_nombre if not es_jefe else None,
+            consultor=target_cons,
             fecha_objetivo=fecha_obj,
             estado="completada"
         )
 
-        dia_txt = "hoy" if fecha_obj == datetime.now(pytz.timezone(settings.TIMEZONE)).date() else f"el {fecha_obj.strftime('%d/%m/%Y')}"
+        dia_txt = "HOY" if fecha_obj == datetime.now(pytz.timezone(settings.TIMEZONE)).date() else f"EL {fecha_obj.strftime('%d/%m/%Y')}"
+        fecha_fmt = fecha_obj.strftime('%d/%m/%Y')
+
         if not pendientes and not completadas:
-            resp = f"✨ *No hay compromisos anotados para {dia_txt}.*\nPodés sumar diciendo ej: _\"tareas para mañana: Querys de Montarfe, Hablar con Pedro\"_."
+            if target_cons:
+                resp = f"✨ *{target_cons} no tiene tareas anotadas para {dia_txt.lower()}.*"
+            else:
+                resp = f"✨ *No hay tareas registradas para {dia_txt.lower()} ({fecha_fmt}).*\n\nPodés dejar una tarea diciendo ej:\n• _\"Dejale una tarea a Juan Luis: llamar a Cargill\"_\n• _\"Tarea para Melani: revisar facturas\"_\n• _\"Tareas de hoy: 1. Llamar cliente 2. Enviar reporte\"_"
             await safe_reply(update, resp)
             return
 
-        resp = f"🎯 *Horizonte de Tareas para {dia_txt}:*\n\n"
+        resp = f"🎯 *HORIZONTE DE TAREAS ({dia_txt} - {fecha_fmt}):*\n"
+        resp += "───────────────────────────\n\n"
         keyboard = []
-        if pendientes:
-            resp += "⏳ *Pendientes (por sacar sí o sí):*\n"
-            for p in pendientes:
-                cons_tag = f" _({p['consultor']})_" if es_jefe else ""
-                resp += f"• [ ] *#{p['id']}* {p['tarea']}{cons_tag}\n"
+
+        pendientes_melani = [p for p in pendientes if "MELANI" in str(p.get("consultor", "")).upper()]
+        pendientes_jl = [p for p in pendientes if "JUAN" in str(p.get("consultor", "")).upper()]
+        otros_pendientes = [p for p in pendientes if p not in pendientes_melani and p not in pendientes_jl]
+
+        if pendientes_melani:
+            resp += "👩‍💼 *Tareas de MELANI:*\n"
+            for p in pendientes_melani:
+                resp += f"• [ ] *#{p['id']}* {p['tarea']}\n"
                 keyboard.append([
-                    InlineKeyboardButton(f"✅ #{p['id']} {p['tarea'][:25]}", callback_data=f"completar_tarea_{p['id']}")
+                    InlineKeyboardButton(f"✅ #{p['id']} (Melani) {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
+                ])
+            resp += "\n"
+
+        if pendientes_jl:
+            resp += "👨‍💼 *Tareas de JUAN LUIS:*\n"
+            for p in pendientes_jl:
+                resp += f"• [ ] *#{p['id']}* {p['tarea']}\n"
+                keyboard.append([
+                    InlineKeyboardButton(f"✅ #{p['id']} (Juan) {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
+                ])
+            resp += "\n"
+
+        if otros_pendientes:
+            resp += "📌 *Otras tareas:*\n"
+            for p in otros_pendientes:
+                resp += f"• [ ] *#{p['id']}* {p['tarea']} _({p.get('consultor', '')})_\n"
+                keyboard.append([
+                    InlineKeyboardButton(f"✅ #{p['id']} {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
                 ])
             resp += "\n"
 
         if completadas:
             resp += "✅ *Completadas:*\n"
             for c in completadas:
-                resp += f"• [x] ~{c['tarea']}~\n"
+                con_tag = f" _({c.get('consultor', '')})_" if c.get('consultor') else ""
+                resp += f"• [x] ~#{c['id']} {c['tarea']}~{con_tag}\n"
+            resp += "\n"
 
+        resp += "_Tocá el botón ✅ para marcarla como lista o decí 'tarea [número] lista'._"
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
         await safe_reply(update, resp, reply_markup=reply_markup)
 
@@ -950,7 +1041,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
         await safe_reply(update, respuesta_formateada)
 
     else:
-        resp = analisis.get("respuesta_amigable", "Entendido.")
+        resp = ai_service.responder_conversacion_ia(texto_usuario, user_name=consultor_nombre)
         await safe_reply(update, resp)
 
 async def borrar_ultimo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1047,7 +1138,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=ParseMode.MARKDOWN
                 )
             else:
-                await query.edit_message_text("❌ Error al crear el evento en Google Calendar.")
+                await query.edit_message_text(_format_calendar_create_error(), parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             await query.edit_message_text(f"❌ Error: {e}")
 
@@ -1075,7 +1166,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=ParseMode.MARKDOWN
                 )
             else:
-                await query.edit_message_text("❌ Error al crear el evento en Google Calendar.")
+                await query.edit_message_text(_format_calendar_create_error(), parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             await query.edit_message_text(f"❌ Error: {e}")
 
@@ -1127,6 +1218,54 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # --- TAREAS PROGRAMADAS (CRON) ---
 
+_eventos_notificados_15m = set()
+
+async def job_alarmas_proximos_eventos(context: ContextTypes.DEFAULT_TYPE):
+    """Revisa cada minuto si hay eventos que comienzan en los próximos 15 minutos y dispara una alarma."""
+    chat_id = settings.TELEGRAM_GROUP_CHAT_ID
+    if not chat_id:
+        return
+    tz = pytz.timezone(settings.TIMEZONE)
+    now = datetime.now(tz)
+    hoy = now.date()
+
+    eventos = calendar_service.get_events_for_date(hoy)
+    for ev in eventos:
+        start_str = ev.get("start", "")
+        if "T" not in str(start_str):
+            continue
+        try:
+            ev_start = datetime.fromisoformat(str(start_str))
+            if ev_start.tzinfo is None:
+                ev_start = tz.localize(ev_start)
+            
+            mins_restantes = (ev_start - now).total_seconds() / 60.0
+            ev_key = f"{ev.get('id')}_{start_str}"
+
+            # Alerta con 15 minutos de anticipación (entre 0 y 15 minutos)
+            if 0 <= mins_restantes <= 15 and ev_key not in _eventos_notificados_15m:
+                _eventos_notificados_15m.add(ev_key)
+                min_texto = f"en {int(round(mins_restantes))} minutos" if mins_restantes >= 1.5 else "¡en breve!"
+                hora_corta = ev_start.strftime("%H:%M")
+
+                texto = (
+                    f"⏰ *¡ALARMA DE REUNIÓN / COMPROMISO!* 🔔\n\n"
+                    f"📌 *{ev['summary']}*\n"
+                    f"⏱️ *Hora:* `{hora_corta} hs` ({min_texto})\n"
+                )
+                if ev.get("location"):
+                    texto += f"📍 *Lugar:* {ev['location']}\n"
+                if ev.get("description"):
+                    desc = ev['description'].strip()
+                    if len(desc) > 200:
+                        desc = desc[:200] + "..."
+                    texto += f"ℹ️ {desc}\n"
+
+                await send_group_safe(context.bot, chat_id, texto)
+                logger.info(f"Alarma de 15m enviada para: {ev['summary']} ({hora_corta} hs)")
+        except Exception as e:
+            logger.error(f"Error procesando alarma para evento {ev}: {e}")
+
 async def job_recordatorio_manana(context: ContextTypes.DEFAULT_TYPE):
     """Envía a la mañana (09:00 hs) la agenda de hoy y el recordatorio previo si mañana hay eventos."""
     chat_id = settings.TELEGRAM_GROUP_CHAT_ID
@@ -1143,32 +1282,32 @@ async def job_recordatorio_manana(context: ContextTypes.DEFAULT_TYPE):
     if not eventos_hoy and not eventos_manana and not compromisos_hoy:
         return
 
-    texto = "☀️ *¡Buen día equipo! Agenda y Recordatorios:*\n\n"
+    texto = "☀️ *¡Buen día equipo! Arrancamos la jornada:* 🚀\n\n"
     if eventos_hoy:
-        texto += f"🗓️ *Eventos en Google Calendar para HOY ({hoy.strftime('%d/%m/%Y')}):*\n"
+        texto += f"🗓️ *Reuniones en agenda para HOY ({hoy.strftime('%d/%m/%Y')}):*\n"
         for ev in eventos_hoy:
             start_str = ev['start']
             hora = start_str.split("T")[1][:5] if "T" in start_str else "Todo el día"
-            texto += f"• `{hora}` - *{ev['summary']}*\n"
+            texto += f"• ⏰ `{hora}` - *{ev['summary']}*\n"
         texto += "\n"
 
     if compromisos_hoy:
-        texto += f"🎯 *Horizonte de Tareas para HOY (Sacar sí o sí):*\n"
+        texto += f"🎯 *Tareas clave para hoy (sacar sí o sí):*\n"
         for c in compromisos_hoy:
             cons_tag = f" _({c.get('consultor', '')})_" if c.get('consultor') else ""
             texto += f"• [ ] *#{c['id']}* {c['tarea']}{cons_tag}\n"
         texto += "\n"
 
     if eventos_manana:
-        texto += f"🔔 *Recordatorio (El día previo): Mañana ({manana.strftime('%d/%m/%Y')}) tienen:*\n"
+        texto += f"🔔 *Y ojo que mañana ({manana.strftime('%d/%m/%Y')}) se viene:*\n"
         for ev in eventos_manana:
             start_str = ev['start']
             hora = start_str.split("T")[1][:5] if "T" in start_str else "Todo el día"
             texto += f"• ⏰ `{hora}` - *{ev['summary']}*\n"
         texto += "\n"
 
-    texto += "¡Que tengan una excelente jornada laboral! 🚀"
-    await context.bot.send_message(chat_id=chat_id, text=texto, parse_mode=ParseMode.MARKDOWN)
+    texto += "¡Que tengan un día de diez! 💪🏻"
+    await send_group_safe(context.bot, chat_id, texto)
 
 async def job_recordatorio_noche(context: ContextTypes.DEFAULT_TYPE):
     """Envía a la noche (20:30 hs) el recordatorio si mañana hay eventos agendados o tareas pendientes."""
@@ -1185,7 +1324,7 @@ async def job_recordatorio_noche(context: ContextTypes.DEFAULT_TYPE):
     if not eventos_manana and not compromisos_manana:
         return
 
-    texto = f"🌙 *Horizonte y Agenda para mañana ({manana.strftime('%d/%m/%Y')}):*\n\n"
+    texto = f"🌙 *¡Buen cierre de jornada gente! Mañana ({manana.strftime('%d/%m/%Y')}) se viene:*\n\n"
     if eventos_manana:
         texto += "🗓️ *Reuniones agendadas:*\n"
         for ev in eventos_manana:
@@ -1201,9 +1340,9 @@ async def job_recordatorio_noche(context: ContextTypes.DEFAULT_TYPE):
             texto += f"• [ ] *#{c['id']}* {c['tarea']}{cons_tag}\n"
         texto += "\n"
 
-    texto += "¡Que descansen y buen cierre de día! ✨"
+    texto += "¡A descansar y recargar pilas! ✨"
 
-    await context.bot.send_message(chat_id=chat_id, text=texto, parse_mode=ParseMode.MARKDOWN)
+    await send_group_safe(context.bot, chat_id, texto)
 
 async def job_resumen_tarde(context: ContextTypes.DEFAULT_TYPE):
     """Envía el resumen de tickets cargados hoy a las 18:30."""
@@ -1227,7 +1366,37 @@ async def job_resumen_tarde(context: ContextTypes.DEFAULT_TYPE):
     else:
         texto += "⚠️ _No se registraron tickets hoy en el sistema._"
 
-    await context.bot.send_message(chat_id=chat_id, text=texto, parse_mode=ParseMode.MARKDOWN)
+    await send_group_safe(context.bot, chat_id, texto)
+
+async def tareas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /tareas: muestra las tareas del día de Melani y Juan Luis."""
+    user = update.effective_user
+    consultor_db = db.get_consultant_by_telegram_id(user.id)
+    consultor_nombre = consultor_db.get("consultor", user.first_name) if consultor_db else user.first_name
+    await handle_message(update, context, texto_override="/tareas")
+
+async def tarea_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /tarea: agrega una tarea para Juan Luis, Melani o uno mismo."""
+    user = update.effective_user
+    consultor_db = db.get_consultant_by_telegram_id(user.id)
+    consultor_nombre = consultor_db.get("consultor", user.first_name) if consultor_db else user.first_name
+    if not context.args:
+        texto = (
+            "📌 *Cómo usar el comando /tarea:*\n\n"
+            "• Para dejarle una tarea a Juan Luis:\n"
+            "  `/tarea Juan Luis llamar a Cargill`\n\n"
+            "• Para dejarle una tarea a Melani:\n"
+            "  `/tarea Melani revisar facturación`\n\n"
+            "• Para una tarea propia:\n"
+            "  `/tarea Comprar insumos`\n\n"
+            "💡 _¡También podés mandar una nota de voz 🎙️ o escribir normalmente!_\n"
+            "Ej: _\"Dejale una tarea a Juan Luis: llamar a Petrobono\"_"
+        )
+        await safe_reply(update, texto)
+        return
+    
+    texto_raw = "/tarea " + " ".join(context.args)
+    await handle_message(update, context, texto_override=texto_raw)
 
 async def recordatorio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /recordatorio: Muestra los compromisos agendados para mañana (día previo)."""
@@ -1243,6 +1412,8 @@ async def recordatorio_command(update: Update, context: ContextTypes.DEFAULT_TYP
             start_str = ev['start']
             hora = start_str.split("T")[1][:5] if "T" in start_str else "Todo el día"
             texto += f"• ⏰ `{hora}` - *{ev['summary']}*\n"
+    elif calendar_service.last_errors:
+        texto = "⚠️ *Error al consultar Google Calendar:* No se pudo verificar la agenda de mañana por un problema de autenticación o permisos con Google."
     else:
         texto = f"ℹ️ _Para mañana ({manana.strftime('%d/%m/%Y')}) no hay eventos agendados en el calendario._"
 
@@ -1250,7 +1421,39 @@ async def recordatorio_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # --- MAIN ---
 
+def _start_healthcheck_server():
+    """Abre un servidor HTTP mínimo cuando PORT está definido (necesario en Render Web Service)."""
+    port_str = os.getenv("PORT", "").strip()
+    if not port_str:
+        return
+    try:
+        port = int(port_str)
+    except ValueError:
+        return
+
+    class _HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"OK - Asistente Grandi activo")
+
+        def do_HEAD(self):
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            return
+
+    def _serve():
+        server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+        logger.info(f"Servidor healthcheck escuchando en puerto {port}.")
+        server.serve_forever()
+
+    threading.Thread(target=_serve, daemon=True).start()
+
 def main():
+    _start_healthcheck_server()
     if not settings.TELEGRAM_BOT_TOKEN:
         logger.error("¡ERROR CRÍTICO! TELEGRAM_BOT_TOKEN no está definido en el archivo .env")
         return
@@ -1266,6 +1469,8 @@ def main():
     app.add_handler(CommandHandler("horas", horas_command))
     app.add_handler(CommandHandler("ranking", ranking_command))
     app.add_handler(CommandHandler("demanda", ranking_command))
+    app.add_handler(CommandHandler("tareas", tareas_command))
+    app.add_handler(CommandHandler("tarea", tarea_command))
     app.add_handler(CommandHandler("recordatorio", recordatorio_command))
     app.add_handler(CommandHandler("borrar_ultimo", borrar_ultimo_command))
 
@@ -1280,13 +1485,22 @@ def main():
     app.add_error_handler(error_handler)
 
     if app.job_queue and settings.TELEGRAM_GROUP_CHAT_ID:
-        hora_manana = time(hour=9, minute=0, tzinfo=tz)
+        hora_manana = time(hour=8, minute=0, tzinfo=tz)
         hora_tarde = time(hour=18, minute=30, tzinfo=tz)
         hora_noche = time(hour=20, minute=30, tzinfo=tz)
         app.job_queue.run_daily(job_recordatorio_manana, time=hora_manana)
         app.job_queue.run_daily(job_resumen_tarde, time=hora_tarde)
         app.job_queue.run_daily(job_recordatorio_noche, time=hora_noche)
-        logger.info("Recordatorios automáticos programados: Mañana (09:00 hs), Cierre (18:30 hs), Noche (20:30 hs).")
+        
+        # Alarma recurrente: chequea cada 60 segundos si algún evento empieza en los próximos 15 minutos
+        app.job_queue.run_repeating(job_alarmas_proximos_eventos, interval=60, first=5)
+
+        # Si el bot inicia en la mañana (entre las 07:00 y las 12:00), enviar el resumen del día de inmediato
+        now = datetime.now(tz)
+        if 7 <= now.hour < 12:
+            app.job_queue.run_once(job_recordatorio_manana, when=2)
+
+        logger.info("Recordatorios y Alarmas programados: Mañana (08:00 hs), Cierre (18:30 hs), Noche (20:30 hs) y Alarmas 15m antes de cada evento.")
 
     logger.info("Iniciando Asistente de Telegram...")
     app.run_polling()
