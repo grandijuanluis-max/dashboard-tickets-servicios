@@ -408,21 +408,36 @@ def resolver_destinatario(t: str, user_name: str = "MELANI") -> Dict[str, Any]:
 
 def parsear_crear_evento(t: str, user_text: str, ahora: datetime, tz) -> Optional[Dict[str, Any]]:
     """Detecta si se quiere crear/agendar un evento en Google Calendar."""
-    # 1. Si es consulta de agenda o sustantivo "agenda", descartar
-    if any(p in t for p in [
-        "agenda de", "agenda del", "agenda para", "agenda hoy", "agenda mañana", "agenda manana",
+    # 0. Descartar consultas puras de agenda (ej: "¿qué hay en la agenda hoy?", "ver agenda", "mostrar agenda")
+    es_pregunta_agenda = any(p in t for p in [
         "ver agenda", "mostrar agenda", "revisar agenda", "consultar agenda",
         "como viene la agenda", "cómo viene la agenda", "que hay en la agenda", "qué hay en la agenda",
-        "que hay", "qué hay", "como viene", "cómo viene", "que tenemos", "qué tenemos"
-    ]) or t.strip() in ["agenda", "calendario"]:
+        "que hay hoy", "qué hay hoy", "como viene hoy", "cómo viene hoy",
+        "como viene mañana", "cómo viene mañana"
+    ]) or t.strip() in ["agenda", "calendario", "ver calendario", "mostrar calendario"]
+
+    tiene_verbo_crear_agenda = any(v in t for v in [
+        "agend", "carg", "anot", "crear", "sumar", "program", "poner", "poneme", "reunion", "reunión", "meet", "llamada"
+    ])
+
+    if es_pregunta_agenda and not tiene_verbo_crear_agenda:
         return None
 
-    # Si dice 'agenda' como sustantivo
-    if re.search(r"\b(la|mi|tu|nuestra|una)?\s*agenda\s+(de|del|para|hoy|mañana|manana|este|esta)\b", t):
-        return None
-
-    # 2. Requiere verbo explícito de creación
-    patron_crear = r"\b(agend[aá]me|agend[aá]te|agend[aá]lo|agend[aá]la|agend[aá]|agendar|crear evento|cre[aá] evento|anot[aá] reuni[oó]n|anotar reuni[oó]n|anotame reuni[oó]n|programar reuni[oó]n|program[aá] reuni[oó]n|programar llamada|program[aá] llamada)\b"
+    # Requiere intención explícita de agendar/crear evento
+    patron_crear = (
+        r"\b(agend[aá]me|agend[aá]te|agend[aá]lo|agend[aá]la|agend[aá]|agendar|"
+        r"cargar\s+(?:en\s+la\s+|en\s+|a\s+la\s+|la\s+)?agenda|"
+        r"carg[aá]\s+(?:en\s+la\s+|en\s+|a\s+la\s+|la\s+)?agenda|"
+        r"cargame\s+(?:en\s+la\s+|en\s+|a\s+la\s+|la\s+)?agenda|"
+        r"poner\s+(?:en\s+la\s+|en\s+)?agenda|poneme\s+(?:en\s+la\s+|en\s+)?agenda|"
+        r"sumar\s+(?:a\s+la\s+|en\s+la\s+)?agenda|sumame\s+(?:a\s+la\s+|en\s+la\s+)?agenda|"
+        r"crear\s+evento|cre[aá]\s+evento|"
+        r"anot[aá]\s+reuni[oó]n|anotar\s+reuni[oó]n|anotame\s+reuni[oó]n|"
+        r"programar\s+reuni[oó]n|program[aá]\s+reuni[oó]n|programar\s+llamada|program[aá]\s+llamada|"
+        r"reuni[oó]n\s+(?:para\s+)?(?:hoy|mañana|manana|el\s+\w+)?\s*(?:a\s+las\s+\d{1,2}|\d{1,2}\s*hs)?|"
+        r"meet\s+(?:para\s+)?(?:hoy|mañana|manana|el\s+\w+)?\s*(?:a\s+las\s+\d{1,2}|\d{1,2}\s*hs)?|"
+        r"call\s+(?:para\s+)?(?:hoy|mañana|manana|el\s+\w+)?\s*(?:a\s+las\s+\d{1,2}|\d{1,2}\s*hs)?)\b"
+    )
     if not re.search(patron_crear, t):
         return None
 
@@ -482,11 +497,13 @@ def parsear_crear_evento(t: str, user_text: str, ahora: datetime, tz) -> Optiona
     # 4. Título
     clean_title = user_text
     for prefix in [
+        "quiero cargar la agenda de google", "quiero cargar en la agenda", "cargar la agenda de google",
+        "cargar en la agenda", "cargar a la agenda", "cargar la agenda", "cargar agenda",
         "Agendá reunión", "agendá reunión", "Agendame reunión", "agendame reunión",
         "Agendar reunión", "agendar reunión", "Agendá llamada", "agendá llamada",
         "Agendame llamada", "agendame llamada", "Agendá", "agendá", "Agendame", "agendame",
         "Agendar", "agendar", "agendate", "Crear evento", "crear evento",
-        "Anotar reunión", "anotar reunion"
+        "Anotar reunión", "anotar reunion", "anotame reunion", "sumar a la agenda", "poner en la agenda"
     ]:
         clean_title = re.sub(rf"(?i)\b{re.escape(prefix)}\b", "", clean_title)
 
@@ -614,6 +631,9 @@ def parsear_compromisos(t: str, user_text: str, ahora: datetime) -> Optional[Dic
             "tareas de mañana", "tareas de manana", "compromisos de hoy", "compromisos para hoy",
             "compromisos de mañana", "compromisos de manana", "compromisos para mañana", "compromisos para manana",
             "que tengo que hacer", "qué tengo que hacer", "que tengo pendiente", "qué tengo pendiente",
+            "que tengo para hoy", "qué tengo para hoy", "que tenemos para hoy", "qué tenemos para hoy",
+            "que tengo hoy", "qué tengo hoy",
+            "que tengo para mañana", "qué tengo para mañana", "que tenemos para mañana", "qué tenemos para mañana",
             "que hay que sacar", "qué hay que sacar", "cuales son mis tareas", "cuáles son mis tareas",
             "ver tareas", "ver compromisos", "mostrar tareas", "mostrar compromisos"
         ])
