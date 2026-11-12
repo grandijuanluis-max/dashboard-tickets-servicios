@@ -1134,6 +1134,16 @@ async def handle_message(
                 )
                 if evento:
                     reg_estado = "evento_agendado"
+                    cal_ids = calendar_service._api_calendar_ids()
+                    ev_guardado = {
+                        "id": evento.get("id"),
+                        "calendar_id": cal_ids[0] if cal_ids else "primary",
+                        "summary": titulo,
+                        "start": start_dt.isoformat(),
+                        "end": (start_dt + timedelta(minutes=duracion)).isoformat(),
+                        "htmlLink": evento.get("htmlLink", ""),
+                    }
+                    context.application.bot_data["ultimo_evento_avisado"] = ev_guardado
                     link = evento.get("htmlLink", "")
                     link_text = f"\n🔗 [Ver en Google Calendar]({link})" if link else ""
                     resp = (
@@ -1151,6 +1161,44 @@ async def handle_message(
                 resp = "⚠️ No llegué a entender bien el día y la hora. Decime por ejemplo: _'Agendá mañana a las 11hs con Palaversich'_."
 
             await safe_reply(update, resp)
+
+        elif intencion == "POSPONER_EVENTO":
+            delta_min = datos.get("delta_minutos")
+            nueva_hora = datos.get("nueva_hora")
+            ev_target = _seleccionar_evento_a_posponer(update, context)
+            if not ev_target:
+                reg_estado = "sin_evento"
+                await safe_reply(
+                    update,
+                    "⚠️ No encontré ninguna reunión reciente o próxima para posponer hoy. "
+                    "Podés responder directamente al aviso de la reunión o revisar `/agenda`.",
+                )
+            else:
+                res_posp = _posponer_evento_calendario(
+                    context,
+                    ev_target,
+                    delta_minutos=delta_min,
+                    nueva_hora=nueva_hora,
+                )
+                if res_posp.get("ok"):
+                    reg_estado = "evento_pospuesto"
+                    reg_detalle = f"{res_posp['summary']} -> {res_posp['nuevo_horario']}"
+                    link = res_posp.get("htmlLink") or ""
+                    link_txt = f"\n🔗 [Ver en Google Calendar]({link})" if link else ""
+                    await safe_reply(
+                        update,
+                        f"✅ *Reunión movida en Google Calendar*\n\n"
+                        f"📌 *{res_posp['summary']}*\n"
+                        f"🕒 *Antes:* `{res_posp['horario_anterior']} hs` _(removida de ese horario)_\n"
+                        f"⏰ *Nuevo horario:* `{res_posp['nuevo_horario']} hs`\n"
+                        f"🔔 _Te vuelvo a avisar 15 minutos antes._{link_txt}",
+                    )
+                else:
+                    reg_estado = "error"
+                    await safe_reply(
+                        update,
+                        f"⚠️ No pude mover la reunión en Google Calendar: `{res_posp.get('error', 'error desconocido')}`",
+                    )
 
         elif intencion == "REGISTRAR_COMPROMISOS":
             fecha_obj_str = datos.get("fecha_objetivo")
@@ -1743,6 +1791,39 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("evento_pendiente", None)
         await query.edit_message_text("❌ *Operación cancelada.* No se agendó ningún evento.", parse_mode=ParseMode.MARKDOWN)
 
+    elif data.startswith("posp_ev_"):
+        # Formato: posp_ev_<minutos>_<token>
+        partes = data.split("_", 3)
+        if len(partes) == 4:
+            try:
+                delta_min = int(partes[2])
+                token = partes[3]
+                ev_info = (context.application.bot_data.get("eventos_por_token") or {}).get(token)
+                if not ev_info:
+                    ev_info = context.application.bot_data.get("ultimo_evento_avisado")
+                if not ev_info:
+                    await query.edit_message_text("⚠️ No encontré los datos de esa reunión para posponerla.")
+                    return
+                res_posp = _posponer_evento_calendario(context, ev_info, delta_minutos=delta_min)
+                if res_posp.get("ok"):
+                    link = res_posp.get("htmlLink") or ""
+                    link_txt = f"\n🔗 [Ver en Google Calendar]({link})" if link else ""
+                    await query.edit_message_text(
+                        f"✅ *Reunión pospuesta +{delta_min} min*\n\n"
+                        f"📌 *{res_posp['summary']}*\n"
+                        f"🕒 *Antes:* `{res_posp['horario_anterior']} hs` _(removida)_\n"
+                        f"⏰ *Nuevo horario:* `{res_posp['nuevo_horario']} hs`\n"
+                        f"🔔 _Te vuelvo a avisar 15 minutos antes._{link_txt}",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+                else:
+                    await query.edit_message_text(
+                        f"⚠️ No pude mover la reunión: `{res_posp.get('error', 'error desconocido')}`",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+            except Exception as e:
+                await query.edit_message_text(f"❌ Error posponiendo reunión: {e}")
+
 async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Procesa notas de voz y audios enviándolos a Gemini para transcribir y luego ejecutar la acción."""
     msg = update.effective_message
@@ -1802,6 +1883,117 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 _eventos_notificados_15m = set()
 
+
+def _parse_event_dt(dt_str: str, tz) -> Optional[datetime]:
+    if not dt_str or "T" not in str(dt_str):
+        return None
+    dt = datetime.fromisoformat(str(dt_str))
+    if dt.tzinfo is None:
+        dt = tz.localize(dt)
+    else:
+        dt = dt.astimezone(tz)
+    return dt
+
+
+def _seleccionar_evento_a_posponer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[Dict[str, Any]]:
+    """Elige el evento de Google Calendar a posponer: reply a alarma > último evento avisado/agendado > próximo evento de hoy."""
+    tz = pytz.timezone(settings.TIMEZONE)
+    now = datetime.now(tz)
+    bot_data = context.application.bot_data
+
+    msg = update.effective_message
+    if msg and msg.reply_to_message:
+        por_msg = bot_data.get("eventos_avisados_por_msg") or {}
+        ev_rep = por_msg.get(msg.reply_to_message.message_id)
+        if ev_rep and ev_rep.get("id") and ev_rep.get("calendar_id"):
+            return ev_rep
+
+    ultimo = bot_data.get("ultimo_evento_avisado")
+    if ultimo and ultimo.get("id") and ultimo.get("calendar_id"):
+        dt_u = _parse_event_dt(ultimo.get("start", ""), tz)
+        if dt_u and dt_u.date() == now.date():
+            return ultimo
+
+    eventos = calendar_service.get_events_for_date(now.date())
+    candidatos = []
+    for ev in eventos:
+        if not ev.get("id") or not ev.get("calendar_id"):
+            continue
+        dt_s = _parse_event_dt(ev.get("start", ""), tz)
+        if not dt_s:
+            continue
+        diff_min = (dt_s - now).total_seconds() / 60.0
+        if diff_min >= -30:
+            candidatos.append((abs(diff_min), ev))
+    if candidatos:
+        candidatos.sort(key=lambda x: x[0])
+        return candidatos[0][1]
+    return None
+
+
+def _posponer_evento_calendario(
+    context: ContextTypes.DEFAULT_TYPE,
+    ev: Dict[str, Any],
+    delta_minutos: Optional[int] = None,
+    nueva_hora: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Mueve un evento existente en Google Calendar al nuevo horario (borrándolo del horario anterior)."""
+    tz = pytz.timezone(settings.TIMEZONE)
+    old_start = _parse_event_dt(str(ev.get("start", "")), tz)
+    if not old_start:
+        return {"ok": False, "error": "El evento no tiene un horario de inicio válido."}
+
+    ev_id = ev.get("id")
+    cal_id = ev.get("calendar_id")
+    if not ev_id or not cal_id:
+        return {"ok": False, "error": "El evento proviene de un calendario de solo lectura (iCal) y no se puede editar."}
+
+    old_end = _parse_event_dt(str(ev.get("end", "")), tz)
+    duracion = int(round((old_end - old_start).total_seconds() / 60.0)) if (old_end and old_end > old_start) else 60
+    if duracion <= 0:
+        duracion = 60
+
+    if nueva_hora:
+        hh, mm = [int(x) for x in nueva_hora.split(":")]
+        new_start = old_start.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    elif delta_minutos is not None:
+        new_start = old_start + timedelta(minutes=int(delta_minutos))
+    else:
+        return {"ok": False, "error": "No se indicó cuánto tiempo posponer."}
+
+    updated = calendar_service.update_event_time(
+        calendar_id=cal_id,
+        event_id=ev_id,
+        new_start_datetime=new_start,
+        duration_minutes=duracion,
+    )
+    if not updated:
+        return {"ok": False, "error": "Google Calendar rechazó o no pudo actualizar el evento."}
+
+    # Limpiar la alarma del horario viejo y actualizar último evento para que vuelva a avisar 15 min antes
+    old_key = f"{ev_id}_{ev.get('start')}"
+    _eventos_notificados_15m.discard(old_key)
+
+    new_start_iso = new_start.isoformat()
+    new_end_iso = (new_start + timedelta(minutes=duracion)).isoformat()
+    ev_actualizado = {
+        "id": ev_id,
+        "calendar_id": cal_id,
+        "summary": ev.get("summary", "Reunión"),
+        "start": new_start_iso,
+        "end": new_end_iso,
+        "htmlLink": updated.get("htmlLink") or ev.get("htmlLink", ""),
+    }
+    context.application.bot_data["ultimo_evento_avisado"] = ev_actualizado
+    return {
+        "ok": True,
+        "summary": ev_actualizado["summary"],
+        "horario_anterior": old_start.strftime("%H:%M"),
+        "nuevo_horario": new_start.strftime("%H:%M"),
+        "htmlLink": ev_actualizado["htmlLink"],
+    }
+
+
 async def job_alarmas_proximos_eventos(context: ContextTypes.DEFAULT_TYPE):
     """Revisa cada minuto si hay eventos que comienzan en los próximos 15 minutos y dispara una alarma."""
     chat_id = settings.TELEGRAM_GROUP_CHAT_ID
@@ -1843,7 +2035,22 @@ async def job_alarmas_proximos_eventos(context: ContextTypes.DEFAULT_TYPE):
                         desc = desc[:200] + "..."
                     texto += f"ℹ️ {desc}\n"
 
-                await send_group_safe(context.bot, chat_id, texto)
+                reply_markup = None
+                if ev.get("id") and ev.get("calendar_id"):
+                    context.application.bot_data["ultimo_evento_avisado"] = ev
+                    tokens = context.application.bot_data.setdefault("eventos_por_token", {})
+                    token = str(abs(hash(ev_key)) % 10**8)
+                    tokens[token] = ev
+                    reply_markup = InlineKeyboardMarkup([[
+                        InlineKeyboardButton("⏰ +15 min", callback_data=f"posp_ev_15_{token}"),
+                        InlineKeyboardButton("⏰ +30 min", callback_data=f"posp_ev_30_{token}"),
+                        InlineKeyboardButton("⏰ +1 hora", callback_data=f"posp_ev_60_{token}"),
+                    ]])
+
+                sent_msg = await send_group_safe(context.bot, chat_id, texto, reply_markup=reply_markup)
+                if sent_msg and ev.get("id") and ev.get("calendar_id"):
+                    por_msg = context.application.bot_data.setdefault("eventos_avisados_por_msg", {})
+                    por_msg[sent_msg.message_id] = ev
                 logger.info(f"Alarma de 15m enviada para: {ev['summary']} ({hora_corta} hs)")
         except Exception as e:
             logger.error(f"Error procesando alarma para evento {ev}: {e}")

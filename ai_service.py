@@ -514,6 +514,74 @@ def _extraer_hora_evento(t: str) -> tuple[int, int]:
 
     return hora, minuto
 
+def parsear_posponer_evento(t: str, ahora: datetime) -> Optional[Dict[str, Any]]:
+    """Detecta pedidos para posponer, mover, adelantar o reprogramar una reunión/evento de Google Calendar."""
+    patron_posponer = (
+        r"\b(?:pospon(?:er(?:l[ao])?|e(?:l[ao])?|[eé](?:l[ao])?)|"
+        r"corr(?:er(?:l[ao])?|e(?:l[ao])?|[eé](?:l[ao])?)|"
+        r"pate(?:ar(?:l[ao])?|a(?:l[ao])?|[aá](?:l[ao])?)|"
+        r"atras(?:ar(?:l[ao])?|a(?:l[ao])?|[aá](?:l[ao])?)|"
+        r"adelant(?:ar(?:l[ao])?|a(?:l[ao])?|[aá](?:l[ao])?)|"
+        r"reprogram(?:ar(?:l[ao])?|a(?:l[ao])?|[aá](?:l[ao])?)|"
+        r"(?:pas|mov)(?:ar(?:l[ao])?|a(?:l[ao])?|[aá](?:l[ao])?|e(?:l[ao])?|[eé](?:l[ao])?))\b"
+    )
+    if not re.search(patron_posponer, t):
+        return None
+
+    # Evitar confundir con "posponer tarea #5" si menciona explícitamente "tarea" sin mencionar reunión/evento
+    if re.search(r"\btareas?\b", t) and not any(w in t for w in ["reunion", "reunión", "evento", "meet", "call", "llamada", "cita", "turno"]):
+        return None
+
+    es_adelanto = re.search(r"\badelant", t) is not None
+
+    # 1. Ver si pide horario explícito destino: "para las 15:30", "a las 3 y media", "a las 16"
+    nueva_hora = None
+    m_hora_dest = re.search(
+        r"(?:para|a)\s+las\s+(\d{1,2})(?::(\d{2})|\s+y\s+(media|cuarto))?(?:\s*(?:hs|horas?))?(?:\s*(?:de\s+la\s+(tarde|noche|ma[ñn]ana)))?",
+        t,
+    )
+    tiene_duracion_rel = any(w in t for w in [
+        "minuto", "minutos", "min", "hora", "horas", "hs", "media hora", "hora y media", "cuarto de hora"
+    ]) and not m_hora_dest
+
+    if m_hora_dest:
+        hh = int(m_hora_dest.group(1))
+        mm = 0
+        if m_hora_dest.group(2):
+            mm = int(m_hora_dest.group(2))
+        elif m_hora_dest.group(3) == "media":
+            mm = 30
+        elif m_hora_dest.group(3) == "cuarto":
+            mm = 15
+        franja = m_hora_dest.group(4) or ""
+        if franja in ("tarde", "noche") and hh < 12:
+            hh += 12
+        elif not franja and hh <= 7 and ahora.hour >= 10:
+            # En horario laboral argentino, "a las 3" / "a las 4" suele ser PM
+            hh += 12
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            nueva_hora = f"{hh:02d}:{mm:02d}"
+
+    # 2. Desplazamiento relativo: "30 minutos", "media hora", "1 hora", etc.
+    delta_minutos = None
+    if tiene_duracion_rel or not nueva_hora:
+        # Solo tomar duración si hay unidad explícita de tiempo
+        if any(w in t for w in ["minuto", "minutos", "min", "hora", "horas", "hs", "media hora", "hora y media", "cuarto de hora"]):
+            mins = extraer_minutos(t)
+            delta_minutos = -mins if es_adelanto else mins
+
+    if delta_minutos is None and nueva_hora is None:
+        return None
+
+    return {
+        "intencion": "POSPONER_EVENTO",
+        "datos": {
+            "delta_minutos": delta_minutos,
+            "nueva_hora": nueva_hora,
+        },
+    }
+
+
 def parsear_crear_evento(t: str, user_text: str, ahora: datetime, tz) -> Optional[Dict[str, Any]]:
     """Detecta si se quiere crear/agendar un evento en Google Calendar."""
     # 0. Descartar consultas puras de agenda o preguntas sobre reuniones existentes
@@ -561,7 +629,7 @@ def parsear_crear_evento(t: str, user_text: str, ahora: datetime, tz) -> Optiona
         r"\b(agend(?:á(?:me|te|lo|la)?|a(?:me|te|lo|la)|ar)|"
         r"(?:cargar|carg[aá]|cargame|registrar|registr[aá]|registrame|anotar|anot[aá]|anotame|poner|poneme|sumar|sum[aá]|sumame|crear|cre[aá]|programar|program[aá]|armar|arm[aá])\s+(?:un[ao]?\s+)?(?:reuni[oó]n|evento|llamada|meet|call|visita|turno|cita)|"
         r"(?:cargar|carg[aá]|cargame|registrar|registr[aá]|registrame|anotar|anot[aá]|anotame|poner|poneme|sumar|sum[aá]|sumame)\s+(?:en\s+(?:el\s+|la\s+)?|a\s+(?:la\s+)?)?(?:agenda|calendario|google\s+calend(?:ar|er)|calendar)|"
-        r"(?:tengo|tenemos)\s+(?:un[ao]?\s+)?(?:reuni[oó]n|meet|call|visita|turno|cita)|"
+        r"(?:tengo|ten[ií]a|tenemos)\s+(?:un[ao]?\s+)?(?:reuni[oó]n|meet|call|visita|turno|cita)|"
         r"(?:reuni[oó]n|meet|call|visita)\s+(?:con\s+\w+\s+)?(?:para\s+)?(?:hoy|mañana|manana|pasado|el\s+\w+|a\s+las\s+\w+|\d{1,2}\s*hs))\b"
     )
     menciona_calendar_y_accion = (
@@ -968,7 +1036,12 @@ class AIService:
                 "datos": {}
             }
 
-        # 0.1 AGENDAR EN GOOGLE CALENDAR (antes de compromisos para no confundir "anotame reunión mañana" con tarea)
+        # 0.1 POSPONER / MOVER REUNIÓN EN GOOGLE CALENDAR
+        posponer_ev = parsear_posponer_evento(t, ahora)
+        if posponer_ev:
+            return posponer_ev
+
+        # 0.2 AGENDAR EN GOOGLE CALENDAR (antes de compromisos para no confundir "anotame reunión mañana" con tarea)
         evento_calendar = parsear_crear_evento(t, user_text, ahora, tz)
         if evento_calendar:
             return evento_calendar
