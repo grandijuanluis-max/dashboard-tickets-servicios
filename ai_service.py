@@ -93,9 +93,24 @@ def extraer_minutos(t: str) -> int:
     # Default a 60 min si no especificó
     return 60
 
+def _sin_tildes(s: str) -> str:
+    return s.translate(str.maketrans("áéíóúüÁÉÍÓÚÜ", "aeiouuAEIOUU"))
+
+
 def limpiar_detalle_tarea(texto_original: str, cliente: Optional[str] = None) -> str:
     """Limpia el texto conversacional (saludos, verbos de carga, tiempo, cliente) para dejar una descripción clara de la tarea en el Dashboard."""
     limpio = texto_original.strip()
+
+    # Si el usuario dictó explícitamente el cuerpo del ticket después de "y pongas:", "que diga:", etc.
+    m_dictado = re.search(
+        r"(?i)(?:y\s+(?:pongas|pon[eé]|anotes|anot[aá]|escribas|digas)|que\s+diga|con\s+(?:el\s+)?detalle)\s*[:,-]?\s*(.+)$",
+        limpio,
+        flags=re.DOTALL,
+    )
+    if m_dictado and len(m_dictado.group(1).strip()) >= 5:
+        cuerpo = re.sub(r'[«»]', '', m_dictado.group(1)).strip().strip('"\'').strip()
+        if len(cuerpo) >= 5:
+            return cuerpo[0].upper() + cuerpo[1:]
 
     # Quitar saludos iniciales comunes
     limpio = re.sub(
@@ -107,6 +122,7 @@ def limpiar_detalle_tarea(texto_original: str, cliente: Optional[str] = None) ->
     # Quitar comandos típicos de inicio
     patrones_comando = [
         r"(?i)^(?:te\s*paso\s*una\s*tarea|anot[aá]\s*una\s*tarea|anotame\s*una\s*tarea|cargame\s*una\s*tarea|carg[aá]\s*una\s*tarea|nueva\s*tarea|tarea\s*nueva|cargar\s*tarea|guardar\s*tarea)\s*[,.:;]?\s*",
+        r"(?i)^(?:necesito\s+que\s+(?:me\s+)?cargues|quiero\s+que\s+(?:me\s+)?cargues|pod[eé]s\s+cargar(?:me)?|me\s+carg[aá]s)\s+",
         r"(?i)^(?:cargame|carg[aá]|registrame|registr[aá]|anotame|anot[aá]|guard[aá]|agreg[aá]|pon[eé]|ponele|cargale|anotale)\s+",
         r"(?i)^(?:estuve\s*trabajando|estuve|hice|trabaj[eé]|labur[eé]|dediqu[eé])\s+",
         r"(?i)^(?:quiero\s*cargar|quisiera\s*cargar|necesito\s*cargar|carguemos)\s+"
@@ -172,8 +188,7 @@ NOMBRES_MESES_ESP = {
 
 INTERROGATIVAS = [
     "cuanto", "cuánto", "cuanta", "cuánta", "cuantos", "cuántos", "cuantas", "cuántas",
-    "que", "qué", "q", "como", "cómo", "quien", "quién", "quienes", "quiénes",
-    "donde", "dónde", "cual", "cuál", "cuales", "cuáles"
+    "qué", "cómo", "quién", "quiénes", "dónde", "cuál", "cuáles"
 ]
 
 PALABRAS_CONSULTA = [
@@ -1016,24 +1031,25 @@ class AIService:
                 "datos": resolver_fecha_agenda(t, ahora)
             }
 
-        # 5. REGISTRAR TICKET (SOLO si NO es pregunta y tiene orden de carga o declaración explícita de horas)
-        if not es_pregunta:
-            tiene_verbo_carga = (
-                any(v in t for v in [
-                    "cargá", "carga ", "cargar ", "cargame", "cargale", "carguemos",
-                    "registrá", "registrar ", "registrame", "registrale",
-                    "anotá", "anota ", "anotar ", "anotame", "anotale",
-                    "guardar ticket", "guardá ticket", "agregar ticket", "agregá ticket",
-                    "te paso una tarea", "te paso tarea", "nueva tarea", "anotar tarea", "cargar tarea",
-                    "cargame una tarea", "cargá una tarea", "anotá una tarea", "anotame una tarea",
-                    "cargale una tarea", "anotale una tarea", "poner tarea", "poné una tarea", "pone una tarea"
-                ]) or
-                any(t.startswith(v) for v in ["carg", "registr", "anot", "guard", "agreg"])
-            )
-            tiene_mencion_duracion = any(w in t for w in [
-                "hora", "horas", "hs", "min", "minuto", "minutos",
-                "media hora", "hora y media", "un cuarto de hora", "tres cuartos de hora"
-            ])
+        # 5. REGISTRAR TICKET (si tiene orden explícita de carga, o si NO es pregunta y declara horas/cliente)
+        tiene_verbo_carga = (
+            any(v in t for v in [
+                "cargá", "carga ", "cargar ", "cargame", "cargale", "carguemos", "cargues",
+                "cargarme", "cargarle", "me cargas", "me cargás", "me cargues",
+                "registrá", "registrar ", "registrame", "registrale", "registres", "registrarme", "me registres",
+                "anotá", "anota ", "anotar ", "anotame", "anotale", "anotes", "anotarme", "me anotes",
+                "guardar ticket", "guardá ticket", "agregar ticket", "agregá ticket",
+                "te paso una tarea", "te paso tarea", "nueva tarea", "anotar tarea", "cargar tarea",
+                "cargame una tarea", "cargá una tarea", "anotá una tarea", "anotame una tarea",
+                "cargale una tarea", "anotale una tarea", "poner tarea", "poné una tarea", "pone una tarea"
+            ]) or
+            any(t.startswith(v) for v in ["carg", "registr", "anot", "guard", "agreg"])
+        )
+        tiene_mencion_duracion = any(w in t for w in [
+            "hora", "horas", "hs", "min", "minuto", "minutos",
+            "media hora", "hora y media", "un cuarto de hora", "tres cuartos de hora"
+        ])
+        if (tiene_verbo_carga and not es_frase_consulta) or not es_pregunta:
             declaracion_horas = (
                 any(w in t.split() for w in ["hice", "estuve", "trabaje", "trabajé", "labure", "laburé", "dedique", "dediqué"]) and
                 tiene_mencion_duracion and
@@ -1045,10 +1061,14 @@ class AIService:
                 minutos = extraer_minutos(t)
 
                 modulo_detectado = "OTROS"
+                t_norm = _sin_tildes(t)
                 for m in MODULOS_CONOCIDOS:
-                    if m.lower() in t:
+                    if _sin_tildes(m.lower()) in t_norm:
                         modulo_detectado = m
                         break
+
+                m_usr = re.search(r"(?i)\busuario\s+([a-záéíóúüñ0-9_.-]+)", user_text)
+                usuario_cliente_detectado = m_usr.group(1).strip().upper() if m_usr else "GENERAL"
 
                 consultor_asignado = "JUANLUIS" if dest["modo"] == "JEFE" else ("MELANI" if dest["modo"] == "COLABORADOR" else user_name)
 
@@ -1062,7 +1082,7 @@ class AIService:
                         "consultas": detalle_limpio,
                         "respuestas": "Resuelto según requerimiento",
                         "modulo": modulo_detectado,
-                        "usuario_cliente": "GENERAL",
+                        "usuario_cliente": usuario_cliente_detectado,
                         "atencion": "WHATSAPP",
                         "consultor_asignado": consultor_asignado
                     }
