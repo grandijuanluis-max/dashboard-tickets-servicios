@@ -12,8 +12,12 @@ CREATE TABLE IF NOT EXISTS public.compromisos_diarios (
     consultor TEXT NOT NULL,
     tarea TEXT NOT NULL,
     fecha_objetivo DATE NOT NULL DEFAULT CURRENT_DATE,
-    estado TEXT NOT NULL DEFAULT 'pendiente', -- 'pendiente' o 'completada'
+    estado TEXT NOT NULL DEFAULT 'pendiente', -- 'pendiente', 'vista', 'en_proceso' o 'completada'
     origen TEXT DEFAULT 'telegram',
+    asignado_por TEXT,
+    respuesta_asignado TEXT,
+    visto_at TIMESTAMP WITH TIME ZONE,
+    en_proceso_at TIMESTAMP WITH TIME ZONE,
     cliente TEXT DEFAULT 'GENERAL',
     modulo TEXT DEFAULT 'OTROS',
     tiempo_estimado_min INTEGER DEFAULT 60,
@@ -24,6 +28,10 @@ CREATE TABLE IF NOT EXISTS public.compromisos_diarios (
 );
 
 -- Por si la tabla ya existía sin las columnas nuevas:
+ALTER TABLE public.compromisos_diarios ADD COLUMN IF NOT EXISTS asignado_por TEXT;
+ALTER TABLE public.compromisos_diarios ADD COLUMN IF NOT EXISTS respuesta_asignado TEXT;
+ALTER TABLE public.compromisos_diarios ADD COLUMN IF NOT EXISTS visto_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE public.compromisos_diarios ADD COLUMN IF NOT EXISTS en_proceso_at TIMESTAMP WITH TIME ZONE;
 ALTER TABLE public.compromisos_diarios ADD COLUMN IF NOT EXISTS cliente TEXT DEFAULT 'GENERAL';
 ALTER TABLE public.compromisos_diarios ADD COLUMN IF NOT EXISTS modulo TEXT DEFAULT 'OTROS';
 ALTER TABLE public.compromisos_diarios ADD COLUMN IF NOT EXISTS tiempo_estimado_min INTEGER DEFAULT 60;

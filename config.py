@@ -18,21 +18,26 @@ def get_credentials_path() -> str:
         return str(BASE_DIR / cred)
     return cred
 
+def _clean_env(name: str, default: str = "") -> str:
+    """Lee una variable de entorno limpiando espacios y comillas accidentales al pegarla en la nube."""
+    val = os.getenv(name, default)
+    return val.strip().strip('"').strip("'") if isinstance(val, str) else default
+
 class Settings(BaseSettings):
-    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    TELEGRAM_GROUP_CHAT_ID: str = os.getenv("TELEGRAM_GROUP_CHAT_ID", "")
+    TELEGRAM_BOT_TOKEN: str = _clean_env("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_GROUP_CHAT_ID: str = _clean_env("TELEGRAM_GROUP_CHAT_ID", "")
     
-    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+    SUPABASE_URL: str = _clean_env("SUPABASE_URL", "")
+    SUPABASE_KEY: str = _clean_env("SUPABASE_KEY", "")
     
     GOOGLE_SERVICE_ACCOUNT_FILE: str = get_credentials_path()
-    GOOGLE_CREDENTIALS_JSON: str = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
-    GOOGLE_TOKEN_JSON: str = os.getenv("GOOGLE_TOKEN_JSON", "")
-    GOOGLE_CALENDAR_ID: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
-    GOOGLE_CALENDAR_ICS_URL: str = os.getenv("GOOGLE_CALENDAR_ICS_URL", "")
+    GOOGLE_CREDENTIALS_JSON: str = os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip()
+    GOOGLE_TOKEN_JSON: str = os.getenv("GOOGLE_TOKEN_JSON", "").strip()
+    GOOGLE_CALENDAR_ID: str = _clean_env("GOOGLE_CALENDAR_ID", "primary")
+    GOOGLE_CALENDAR_ICS_URL: str = _clean_env("GOOGLE_CALENDAR_ICS_URL", "")
     
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    TIMEZONE: str = os.getenv("TIMEZONE", "America/Argentina/Buenos_Aires")
-    DEBUG: bool = os.getenv("DEBUG", "True").lower() in ("true", "1", "yes")
+    GEMINI_API_KEY: str = _clean_env("GEMINI_API_KEY", "")
+    TIMEZONE: str = _clean_env("TIMEZONE", "America/Argentina/Buenos_Aires")
+    DEBUG: bool = _clean_env("DEBUG", "True").lower() in ("true", "1", "yes")
 
 settings = Settings()

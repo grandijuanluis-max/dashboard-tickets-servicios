@@ -681,6 +681,41 @@ def parsear_compromisos(t: str, user_text: str, ahora: datetime) -> Optional[Dic
             }
         }
 
+    # 1.1 Respuesta / acuse de recibo / en proceso de una tarea asignada
+    m_resp_id = re.search(r"(?:tarea|compromiso)\s*#?\s*(\d+)", t)
+    es_en_proceso = bool(re.search(
+        r"\b(?:(?:la|lo)\s+estoy\s+(?:haciendo|por\s+hacer|viendo|revisando)|estoy\s+(?:con\s+(?:eso|esa|la\s+tarea)|haciendo|viendo|revisando|en\s+eso|por\s+hacer)|ya\s+me\s+pongo|me\s+pongo\s+(?:a\s+hacer|con)|ya\s+arranco|arranco\s+(?:con|ahora)|ahora\s+(?:la|lo)\s+hago|en\s+proceso|(?:la|lo)\s+hago\s+ahora)\b",
+        t,
+    ))
+    es_visto = bool(re.search(
+        r"\b(?:ya\s+(?:la|lo)\s+vi|(?:la|lo)\s+vi|ya\s+vi|visto|recibid[oa]|enterad[oa]|anotad[oa]|ah[ií]\s+(?:la|lo)\s+veo|ahora\s+(?:la|lo)\s+veo|despu[eé]s\s+(?:la|lo)\s+veo|en\s+un\s+rato\s+(?:la|lo)\s+veo)\b",
+        t,
+    )) or (m_resp_id is not None and bool(re.search(r"\bvi\b", t)))
+    m_sobre = re.match(r"^(?:responder|respuesta|sobre|aviso|avisar)\s+(?:la\s+|a\s+la\s+)?(?:tarea|compromiso)\s*#?\s*(\d+)\s*[:,\-]?\s*(.+)$", user_text.strip(), flags=re.IGNORECASE)
+
+    if m_sobre:
+        nota_raw = m_sobre.group(2).strip()
+        accion_resp = "en_proceso" if es_en_proceso else ("vista" if es_visto else "nota")
+        return {
+            "intencion": "RESPONDER_COMPROMISO",
+            "datos": {
+                "id_compromiso": int(m_sobre.group(1)),
+                "accion": accion_resp,
+                "nota": nota_raw,
+            }
+        }
+
+    if (es_en_proceso or es_visto) and (m_resp_id or len(t.split()) <= 16):
+        accion_resp = "en_proceso" if es_en_proceso else "vista"
+        return {
+            "intencion": "RESPONDER_COMPROMISO",
+            "datos": {
+                "id_compromiso": int(m_resp_id.group(1)) if m_resp_id else None,
+                "accion": accion_resp,
+                "nota": user_text.strip(),
+            }
+        }
+
     # Detectar destinatario objetivo si se menciona explícitamente a Juan Luis o Melani
     destinatario = None
     if re.search(r"(?:\b(?:a|para|de)\s+|/tarea\s+(?:a\s+|para\s+)?)(?:juan\s*luis|juan|jl|al\s+jefe|el\s+jefe)\b", t) or \
@@ -1193,6 +1228,13 @@ class AIService:
                 }
             }
 
+        # 10.5. CONSULTA DE CONSULTORES DEL EQUIPO (evita que Gemini invente nombres)
+        if re.search(r"\b(?:consultor|consultores|equipo|usuarios|integrantes)\b", t):
+            return {
+                "intencion": "CONSULTAR_CONSULTORES",
+                "datos": {}
+            }
+
         # 11. Fallback conversacional
         return {
             "intencion": "CONVERSACION_GENERAL",
@@ -1212,9 +1254,10 @@ class AIService:
             client = genai.Client(api_key=settings.GEMINI_API_KEY)
             
             system_prompt = (
-                "Sos el asistente virtual del equipo Grandi (Melani y Juan Luis). "
+                "Sos el asistente virtual del equipo Grandi (integrado únicamente por Melani y Juan Luis). "
                 "Tu personalidad es relajada, simpática, descontracturada y muy compañera, con tono argentino natural (usás voseo: 'dale', 'che', 'joya', 'de una', 'tranqui', 'decime', '¡buenas!'). "
                 "Respondé de forma concisa, cálida y directa (máximo 1 o 2 oraciones breves, sin rodeos ni parrafadas). "
+                "NUNCA inventes nombres de consultores, emails, clientes, números de tickets ni datos del sistema; si te piden información real del sistema que no tenés, indicá usar los comandos (/horas, /hoy, /tareas, /consultores). "
                 "NUNCA hables como un robot ni menciones tablas de base de datos como 'bd_dashboard_servicios' ni 'USER'. "
                 f"Estás hablando con {nombre_amigable}. "
                 "Si te saludan, te agradecen o te hacen charla, respondé con buena onda y deciles que estás listo para darles una mano con lo que haga falta (horas, tareas, reuniones o clientes)."
@@ -1230,7 +1273,7 @@ class AIService:
                             system_instruction=system_prompt,
                             thinking_config=types.ThinkingConfig(thinking_budget=0),
                             temperature=0.7,
-                            max_output_tokens=150
+                            max_output_tokens=300
                         )
                     )
                     texto_out = ""

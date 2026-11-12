@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -49,14 +50,14 @@ async def safe_reply(update_or_message, text: str, parse_mode=ParseMode.MARKDOWN
         clean_text = text.replace("*", "").replace("_", "").replace("`", "")
         return await msg.reply_text(clean_text, reply_markup=reply_markup)
 
-async def send_group_safe(bot, chat_id, text: str, parse_mode=ParseMode.MARKDOWN):
-    """Envía un mensaje programado al grupo intentando Markdown y haciendo fallback a texto plano si falla."""
+async def send_group_safe(bot, chat_id, text: str, parse_mode=ParseMode.MARKDOWN, reply_markup=None):
+    """Envía un mensaje programado al grupo o por privado intentando Markdown y haciendo fallback a texto plano si falla."""
     try:
-        return await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+        return await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
     except Exception as e:
-        logger.warning(f"Error enviando mensaje Markdown al grupo {chat_id}, reintentando en texto plano: {e}")
+        logger.warning(f"Error enviando mensaje Markdown al chat {chat_id}, reintentando en texto plano: {e}")
         clean_text = text.replace("*", "").replace("_", "").replace("`", "")
-        return await bot.send_message(chat_id=chat_id, text=clean_text)
+        return await bot.send_message(chat_id=chat_id, text=clean_text, reply_markup=reply_markup)
 
 def _format_calendar_create_error() -> str:
     """Devuelve un mensaje claro explicando por qué falló la creación del evento en Google Calendar."""
@@ -127,9 +128,35 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(texto)
 
+def _render_consultores_text() -> str:
+    """Genera el texto con los consultores registrados o avisa si falta conexión a Supabase."""
+    if not db.is_connected():
+        return (
+            "⚠️ *No hay conexión con Supabase.*\n\n"
+            "Revisá en Render que `SUPABASE_URL` y `SUPABASE_KEY` estén bien cargadas (sin espacios ni comillas)."
+        )
+    consultores = db.get_consultants()
+    if not consultores:
+        return (
+            "ℹ️ No encontré consultores en `config_consultores` (o falló la consulta a Supabase).\n"
+            "Verificá `SUPABASE_URL` y `SUPABASE_KEY`."
+        )
+    texto = "👥 *Consultores Registrados:*\n\n"
+    for c in consultores:
+        texto += f"• `{c}`\n"
+    texto += "\nPara vincularte escribí: `/vincular TU_NOMBRE`"
+    return texto
+
 async def vincular_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Vincula el Telegram ID actual con un registro en config_consultores."""
     user = update.effective_user
+    if not db.is_connected():
+        await update.message.reply_text(
+            "⚠️ *No hay conexión con Supabase.*\n"
+            "Revisá en Render que `SUPABASE_URL` y `SUPABASE_KEY` estén cargadas correctamente.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
     if not context.args:
         await update.message.reply_text(
             "Uso: `/vincular TU_NOMBRE` (ej: `/vincular MELANI`)",
@@ -157,16 +184,7 @@ async def vincular_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def consultores_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lista los consultores registrados en el sistema."""
-    consultores = db.get_consultants()
-    if not consultores:
-        await update.message.reply_text("ℹ️ No se pudieron listar los consultores o no hay registrados.")
-        return
-
-    texto = "👥 *Consultores Registrados:*\n\n"
-    for c in consultores:
-        texto += f"• `{c}`\n"
-    texto += "\nPara vincularte escribí: `/vincular TU_NOMBRE`"
-    await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+    await safe_reply(update, _render_consultores_text())
 
 async def responder_agenda(
     update: Update, 
@@ -679,6 +697,121 @@ def _nombre_corto(nombre: Optional[str]) -> str:
         return "Juan Luis"
     return str(nombre or "Equipo")
 
+def _build_task_action_keyboard(id_comp: int, estado: str = "pendiente", compact: bool = False) -> InlineKeyboardMarkup:
+    """Construye botonera interactiva para responder o completar una tarea asignada."""
+    est = str(estado or "pendiente").lower()
+    rows = []
+    if compact:
+        if est == "pendiente":
+            rows.append([
+                InlineKeyboardButton(f"👀 #{id_comp} Vi", callback_data=f"tarea_vista_{id_comp}"),
+                InlineKeyboardButton(f"🛠️ #{id_comp} Haciendo", callback_data=f"tarea_proceso_{id_comp}"),
+                InlineKeyboardButton(f"✅ #{id_comp} Listo", callback_data=f"completar_tarea_{id_comp}"),
+            ])
+        elif est == "vista":
+            rows.append([
+                InlineKeyboardButton(f"🛠️ #{id_comp} Haciendo", callback_data=f"tarea_proceso_{id_comp}"),
+                InlineKeyboardButton(f"💬 #{id_comp} Resp.", callback_data=f"tarea_responder_{id_comp}"),
+                InlineKeyboardButton(f"✅ #{id_comp} Listo", callback_data=f"completar_tarea_{id_comp}"),
+            ])
+        else:
+            rows.append([
+                InlineKeyboardButton(f"💬 #{id_comp} Responder", callback_data=f"tarea_responder_{id_comp}"),
+                InlineKeyboardButton(f"✅ #{id_comp} Listo", callback_data=f"completar_tarea_{id_comp}"),
+            ])
+        return InlineKeyboardMarkup(rows)
+
+    if est == "pendiente":
+        rows.append([
+            InlineKeyboardButton("👀 Lo vi", callback_data=f"tarea_vista_{id_comp}"),
+            InlineKeyboardButton("🛠️ Lo estoy haciendo", callback_data=f"tarea_proceso_{id_comp}"),
+        ])
+    elif est == "vista":
+        rows.append([
+            InlineKeyboardButton("🛠️ Lo estoy haciendo", callback_data=f"tarea_proceso_{id_comp}"),
+        ])
+    rows.append([
+        InlineKeyboardButton("💬 Responder / Nota", callback_data=f"tarea_responder_{id_comp}"),
+        InlineKeyboardButton("✅ Listo (Cerrar ticket)", callback_data=f"completar_tarea_{id_comp}"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _notificar_asignador(
+    context: ContextTypes.DEFAULT_TYPE,
+    comp: Dict[str, Any],
+    actor: str,
+    chat_id_origen: Optional[int],
+    mensaje: str,
+):
+    """Envía aviso al asignador original y/o grupo cuando el responsable responde o avanza una tarea."""
+    group_id_raw = getattr(settings, "TELEGRAM_GROUP_CHAT_ID", None)
+    group_id = None
+    if group_id_raw:
+        try:
+            group_id = int(str(group_id_raw).strip())
+            if chat_id_origen != group_id:
+                await send_group_safe(context.bot, group_id, mensaje)
+        except Exception as e:
+            logger.warning(f"No se pudo notificar al grupo: {e}")
+
+    asignador = str(comp.get("asignado_por") or "").strip().upper()
+    if not asignador:
+        origen = str(comp.get("origen") or "")
+        if origen.startswith("telegram:"):
+            asignador = origen.split(":", 1)[1].strip().upper()
+
+    if asignador and asignador != str(actor or "").strip().upper():
+        tg_asig = db.get_consultant_telegram_id(asignador)
+        if tg_asig and tg_asig != chat_id_origen and tg_asig != group_id:
+            try:
+                await send_group_safe(context.bot, tg_asig, mensaje)
+            except Exception as e:
+                logger.warning(f"No se pudo avisar por privado al asignador {asignador}: {e}")
+
+
+async def _ejecutar_respuesta_compromiso(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id_origen: Optional[int],
+    id_comp: int,
+    actor: str,
+    accion: str,
+    nota: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Registra respuesta del responsable ('vista', 'en_proceso' o nota) y avisa al asignador."""
+    nuevo_estado = "en_proceso" if accion == "en_proceso" else ("vista" if accion == "vista" else "vista")
+    res = db.actualizar_estado_compromiso(
+        id_comp,
+        nuevo_estado=nuevo_estado,
+        actor=actor,
+        nota=nota,
+    )
+    if not res.get("ok"):
+        return res
+
+    comp = res.get("compromiso") or {}
+    quien = _nombre_corto(actor or comp.get("consultor"))
+    tarea_txt = comp.get("tarea") or f"Tarea #{id_comp}"
+    nota_final = res.get("nota") or ""
+
+    if accion == "en_proceso":
+        icono, titulo = "🛠️", f"*{quien}* avisó que ya está haciendo la tarea *#{id_comp}*"
+    elif accion == "vista":
+        icono, titulo = "👀", f"*{quien}* confirmó que vio la tarea *#{id_comp}*"
+    else:
+        icono, titulo = "💬", f"*{quien}* respondió sobre la tarea *#{id_comp}*"
+
+    msg_aviso = f"{icono} {titulo}\n📝 *Tarea:* {tarea_txt}"
+    if nota_final and nota_final not in ("Visto / Recibido", "En proceso / Lo estoy haciendo"):
+        msg_aviso += f"\n💬 *Respuesta:* _{nota_final}_"
+
+    res["mensaje"] = msg_aviso
+    res["reply_markup"] = _build_task_action_keyboard(id_comp, estado=res.get("estado", nuevo_estado))
+
+    await _notificar_asignador(context, comp, actor, chat_id_origen, msg_aviso)
+    return res
+
+
 async def _ejecutar_completar_compromiso(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id_origen: Optional[int],
@@ -702,6 +835,7 @@ async def _ejecutar_completar_compromiso(
     comp = res.get("compromiso") or {}
     ticket = res.get("ticket") or {}
     id_ticket = res.get("id_ticket")
+    ticket_error = res.get("ticket_error")
     quien = _nombre_corto(res.get("completado_por") or completado_por)
     tarea_txt = comp.get("tarea", f"Tarea #{id_comp}")
     cliente_txt = ticket.get("clientes") or comp.get("cliente") or "GENERAL"
@@ -714,8 +848,16 @@ async def _ejecutar_completar_compromiso(
             f"🏢 *Cliente:* {cliente_txt} | 📁 *Módulo:* {modulo_txt}\n"
             f"⏱️ *Tiempo imputado:* `{tiempo_min} min` (`{float(tiempo_min) / 60.0:.2f} hs`)"
         )
+        res["reply_markup"] = None
     else:
-        aviso_ticket = "⚠️ _La tarea quedó completada, pero no se pudo generar el ticket automático en Supabase._"
+        motivo = f"\n🔎 *Motivo:* `{ticket_error}`" if ticket_error else ""
+        aviso_ticket = (
+            "⚠️ _La tarea quedó completada localmente, pero no se pudo subir el ticket automático a Supabase._"
+            f"{motivo}\n_Podés tocar 🔄 para reintentar subirlo ahora._"
+        )
+        res["reply_markup"] = InlineKeyboardMarkup([[
+            InlineKeyboardButton(f"🔄 Reintentar subir ticket #{id_comp}", callback_data=f"reintentar_ticket_{id_comp}")
+        ]])
 
     msg_respuesta = (
         f"🎉 *¡Tarea #{id_comp} completada por {quien}!*\n"
@@ -737,21 +879,23 @@ async def _ejecutar_completar_compromiso(
         except Exception as e:
             logger.warning(f"No se pudo notificar al grupo sobre tarea #{id_comp}: {e}")
 
-    origen = str(comp.get("origen") or "")
-    if origen.startswith("telegram:"):
-        asignador = origen.split(":", 1)[1].strip().upper()
-        if asignador and asignador != str(completado_por or "").strip().upper():
-            tg_asig = db.get_consultant_telegram_id(asignador)
-            if tg_asig and tg_asig != chat_id_origen and str(tg_asig) != str(group_id_raw or "").strip():
-                try:
-                    await send_group_safe(
-                        context.bot,
-                        tg_asig,
-                        f"🔔 *{_nombre_corto(completado_por)} completó la tarea #{id_comp} que le asignaste:*\n"
-                        f"📝 {tarea_txt}\n{aviso_ticket}",
-                    )
-                except Exception as e:
-                    logger.warning(f"No se pudo avisar por privado al asignador {asignador}: {e}")
+    asignador = str(comp.get("asignado_por") or "").strip().upper()
+    if not asignador:
+        origen = str(comp.get("origen") or "")
+        if origen.startswith("telegram:"):
+            asignador = origen.split(":", 1)[1].strip().upper()
+    if asignador and asignador != str(completado_por or "").strip().upper():
+        tg_asig = db.get_consultant_telegram_id(asignador)
+        if tg_asig and tg_asig != chat_id_origen and str(tg_asig) != str(group_id_raw or "").strip():
+            try:
+                await send_group_safe(
+                    context.bot,
+                    tg_asig,
+                    f"🔔 *{_nombre_corto(completado_por)} completó la tarea #{id_comp} que le asignaste:*\n"
+                    f"📝 {tarea_txt}\n{aviso_ticket}",
+                )
+            except Exception as e:
+                logger.warning(f"No se pudo avisar por privado al asignador {asignador}: {e}")
 
     return res
 
@@ -773,6 +917,48 @@ async def handle_message(
 
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
+    # Si el usuario tocó el botón "💬 Responder / Nota" de una tarea, capturar este mensaje/audio como su respuesta
+    pending_reply_tid = context.user_data.pop("esperando_respuesta_tarea_id", None) if hasattr(context, "user_data") else None
+    if pending_reply_tid:
+        res_resp = await _ejecutar_respuesta_compromiso(
+            context=context,
+            chat_id_origen=chat_id,
+            id_comp=int(pending_reply_tid),
+            actor=consultor_nombre,
+            accion="nota",
+            nota=texto_usuario,
+        )
+        if res_resp.get("ok"):
+            comp_r = res_resp.get("compromiso") or {}
+            db.registrar_pedido_bot(
+                mensaje_original=texto_usuario,
+                tipo_entrada=tipo_entrada,
+                consultor=consultor_nombre,
+                destinatario=comp_r.get("consultor"),
+                intencion="RESPONDER_COMPROMISO",
+                cliente=comp_r.get("cliente"),
+                modulo=comp_r.get("modulo"),
+                estado=str(res_resp.get("estado") or "vista"),
+                id_compromiso=int(pending_reply_tid),
+                detalle_resultado=texto_usuario,
+                telegram_user_id=user.id if user else None,
+                telegram_chat_id=chat_id,
+            )
+            await safe_reply(update, f"✅ *Respuesta enviada sobre la tarea #{pending_reply_tid}:*\n_{texto_usuario}_", reply_markup=res_resp.get("reply_markup"))
+        else:
+            await safe_reply(update, f"⚠️ No pude registrar tu respuesta para la tarea #{pending_reply_tid}.")
+        return
+
+    # Extraer #ID si el usuario está respondiendo (swipe-reply) a un mensaje de tarea del bot
+    reply_task_id = None
+    reply_msg = update.effective_message.reply_to_message if update.effective_message else None
+    if reply_msg and (reply_msg.text or reply_msg.caption):
+        reply_body = reply_msg.text or reply_msg.caption or ""
+        if "tarea" in reply_body.lower() or "compromiso" in reply_body.lower() or "asignada" in reply_body.lower():
+            m_tid = re.search(r"#(\d+)", reply_body)
+            if m_tid:
+                reply_task_id = int(m_tid.group(1))
+
     try:
         analisis = ai_service.parse_user_message(texto_usuario, consultor_nombre)
         intencion = analisis.get("intencion")
@@ -782,6 +968,13 @@ async def handle_message(
         analisis = {"respuesta_amigable": "Disculpá, no pude interpretar ese mensaje."}
         intencion = "CONVERSACION_GENERAL"
         datos = {}
+
+    # Si está respondiendo directamente (swipe-reply) a un mensaje de tarea y el mensaje no disparó otra acción, tratarlo como respuesta a esa tarea
+    if reply_task_id and intencion in ("CONVERSACION_GENERAL", None):
+        intencion = "RESPONDER_COMPROMISO"
+        t_low = texto_usuario.lower()
+        accion_auto = "en_proceso" if any(k in t_low for k in ["haciendo", "arranco", "pongo", "por hacer", "ahora lo hago", "en proceso"]) else ("vista" if any(k in t_low for k in ["vi", "visto", "recib", "dale", "ok", "listo"]) else "nota")
+        datos = {"id_compromiso": reply_task_id, "accion": accion_auto, "nota": texto_usuario.strip()}
 
     pedido_logged = False
     reg_destinatario = datos.get("destinatario") or datos.get("consultor_asignado")
@@ -794,14 +987,23 @@ async def handle_message(
 
     try:
         if intencion == "REGISTRAR_TICKET":
+            if not db.is_connected():
+                reg_estado = "error"
+                reg_detalle = "Sin conexión con Supabase"
+                await safe_reply(
+                    update,
+                    "⚠️ *No hay conexión con Supabase.*\n"
+                    "Revisá en Render que `SUPABASE_URL` y `SUPABASE_KEY` estén bien configuradas (sin comillas ni espacios)."
+                )
+                return
             if not consultor_db:
                 reg_estado = "requiere_vinculacion"
                 reg_detalle = "Usuario no vinculado"
-                await update.message.reply_text(
+                await safe_reply(
+                    update,
                     "⚠️ Para registrar tickets en el sistema oficial, primero vinculá tu usuario con:\n"
                     "`/vincular TU_NOMBRE`  _(ej: `/vincular MELANI`)_\n\n"
-                    "Usa `/consultores` para ver los nombres válidos.",
-                    parse_mode=ParseMode.MARKDOWN
+                    "Usa `/consultores` para ver los nombres válidos."
                 )
                 return
 
@@ -975,6 +1177,7 @@ async def handle_message(
                     cliente=cliente_comp,
                     modulo=modulo_comp,
                     tiempo_estimado_min=minutos_comp,
+                    asignado_por=consultor_nombre,
                 )
                 if c:
                     guardadas.append(c)
@@ -1000,8 +1203,9 @@ async def handle_message(
 
                 dest_nombre = _nombre_corto(destinatario)
                 cons_nombre = _nombre_corto(consultor_nombre)
+                es_para_otro = destinatario != consultor_nombre.upper()
 
-                if destinatario != consultor_nombre.upper():
+                if es_para_otro:
                     resp = f"🎯 *Tarea asignada a {dest_nombre} (por {cons_nombre}) — para {dia_txt} ({fecha_fmt}):*\n\n"
                 else:
                     resp = f"🎯 *Compromiso guardado para vos ({dest_nombre}) — para {dia_txt} ({fecha_fmt}):*\n\n"
@@ -1009,12 +1213,40 @@ async def handle_message(
                 keyboard = []
                 for item in guardadas:
                     resp += f"• *#{item['id']}* {item['tarea']}\n"
-                    keyboard.append([
-                        InlineKeyboardButton(f"✅ #{item['id']} {item['tarea'][:25]}", callback_data=f"completar_tarea_{item['id']}")
-                    ])
-                resp += f"\n_Al completarla se crea y cierra su ticket automático. Tocá ✅ o decí 'tarea #{guardadas[0]['id']} lista'._"
+                    if len(guardadas) == 1:
+                        kb_item = _build_task_action_keyboard(item['id'], estado="pendiente")
+                        keyboard.extend(kb_item.inline_keyboard)
+                    else:
+                        kb_item = _build_task_action_keyboard(item['id'], estado="pendiente", compact=True)
+                        keyboard.extend(kb_item.inline_keyboard)
+
+                if es_para_otro:
+                    resp += f"\n_Al tocar 👀 *Lo vi* o 🛠️ *Lo estoy haciendo*, se le avisa automáticamente a {cons_nombre}._"
+                else:
+                    resp += f"\n_Al completarla se crea y cierra su ticket automático. Tocá ✅ o decí 'tarea #{guardadas[0]['id']} lista'._"
                 reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
                 await safe_reply(update, resp, reply_markup=reply_markup)
+
+                # Si la tarea fue asignada a otra persona, avisarle directamente por privado (y con los botones para que responda)
+                if es_para_otro:
+                    tg_dest = db.get_consultant_telegram_id(destinatario)
+                    if tg_dest and tg_dest != chat_id:
+                        try:
+                            for item in guardadas:
+                                msg_dm = (
+                                    f"📌 *Nueva tarea asignada por {cons_nombre}* (para {dia_txt} {fecha_fmt}):\n\n"
+                                    f"• *#{item['id']}* {item['tarea']}\n"
+                                    f"🏢 *Cliente:* {cliente_comp} | 📁 *Módulo:* {modulo_comp}\n\n"
+                                    f"_Confirmá si la viste, si ya la estás haciendo o respondé a este mensaje._"
+                                )
+                                await send_group_safe(
+                                    context.bot,
+                                    tg_dest,
+                                    msg_dm,
+                                    reply_markup=_build_task_action_keyboard(item['id'], estado="pendiente"),
+                                )
+                        except Exception as e_dm:
+                            logger.warning(f"No se pudo notificar por privado a {destinatario}: {e_dm}")
             else:
                 reg_estado = "error"
                 await safe_reply(update, "⚠️ No pude registrar las tareas. Intentá de nuevo.")
@@ -1064,31 +1296,43 @@ async def handle_message(
             pendientes_jl = [p for p in pendientes if "JUAN" in str(p.get("consultor", "")).upper()]
             otros_pendientes = [p for p in pendientes if p not in pendientes_melani and p not in pendientes_jl]
 
+            def _format_estado_badge(comp_item: Dict[str, Any]) -> str:
+                est = str(comp_item.get("estado") or "pendiente").lower()
+                if est == "en_proceso":
+                    tag = "🛠️ _[En proceso]_"
+                elif est == "vista":
+                    tag = "👀 _[Vista]_"
+                else:
+                    tag = ""
+                nota_r = str(comp_item.get("respuesta_asignado") or "").strip()
+                nota_tag = f" — 💬 _{nota_r}_" if nota_r and nota_r not in ("Visto / Recibido", "En proceso / Lo estoy haciendo") else ""
+                return f"{tag}{nota_tag}".strip()
+
             if pendientes_melani:
                 resp += "👩‍💼 *Tareas de MELANI:*\n"
                 for p in pendientes_melani:
-                    resp += f"• [ ] *#{p['id']}* {p['tarea']}\n"
-                    keyboard.append([
-                        InlineKeyboardButton(f"✅ #{p['id']} (Melani) {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
-                    ])
+                    est_txt = _format_estado_badge(p)
+                    extra_e = f" {est_txt}" if est_txt else ""
+                    resp += f"• [ ] *#{p['id']}* {p['tarea']}{extra_e}\n"
+                    keyboard.extend(_build_task_action_keyboard(p['id'], estado=p.get('estado', 'pendiente'), compact=True).inline_keyboard)
                 resp += "\n"
 
             if pendientes_jl:
                 resp += "👨‍💼 *Tareas de JUAN LUIS:*\n"
                 for p in pendientes_jl:
-                    resp += f"• [ ] *#{p['id']}* {p['tarea']}\n"
-                    keyboard.append([
-                        InlineKeyboardButton(f"✅ #{p['id']} (Juan) {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
-                    ])
+                    est_txt = _format_estado_badge(p)
+                    extra_e = f" {est_txt}" if est_txt else ""
+                    resp += f"• [ ] *#{p['id']}* {p['tarea']}{extra_e}\n"
+                    keyboard.extend(_build_task_action_keyboard(p['id'], estado=p.get('estado', 'pendiente'), compact=True).inline_keyboard)
                 resp += "\n"
 
             if otros_pendientes:
                 resp += "📌 *Otras tareas:*\n"
                 for p in otros_pendientes:
-                    resp += f"• [ ] *#{p['id']}* {p['tarea']} _({p.get('consultor', '')})_\n"
-                    keyboard.append([
-                        InlineKeyboardButton(f"✅ #{p['id']} {p['tarea'][:20]}", callback_data=f"completar_tarea_{p['id']}")
-                    ])
+                    est_txt = _format_estado_badge(p)
+                    extra_e = f" {est_txt}" if est_txt else ""
+                    resp += f"• [ ] *#{p['id']}* {p['tarea']} _({p.get('consultor', '')})_{extra_e}\n"
+                    keyboard.extend(_build_task_action_keyboard(p['id'], estado=p.get('estado', 'pendiente'), compact=True).inline_keyboard)
                 resp += "\n"
 
             if completadas:
@@ -1099,9 +1343,48 @@ async def handle_message(
                     resp += f"• [x] ~#{c['id']} {c['tarea']}~{con_tag}{t_tag}\n"
                 resp += "\n"
 
-            resp += "_Tocá el botón ✅ para marcarla como lista o decí 'tarea [número] lista'._"
+            resp += "_Podés marcar 👀 *Vi*, 🛠️ *Haciendo* o ✅ *Listo* (al cerrarla genera el ticket)._"
             reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
             await safe_reply(update, resp, reply_markup=reply_markup)
+
+        elif intencion == "RESPONDER_COMPROMISO":
+            id_comp = datos.get("id_compromiso") or reply_task_id
+            if not id_comp:
+                ult = db.obtener_ultima_tarea_asignada(consultor_nombre)
+                id_comp = ult.get("id") if ult else None
+
+            if not id_comp:
+                reg_estado = "no_encontrado"
+                await safe_reply(
+                    update,
+                    "⚠️ No identifiqué a qué tarea te referís. Indicá el número (ej: _'vi la tarea #8'_ o respondé directamente al mensaje de la tarea).",
+                )
+            else:
+                id_comp = int(id_comp)
+                reg_id_compromiso = id_comp
+                accion_r = str(datos.get("accion") or "vista")
+                nota_r = datos.get("nota")
+                res_r = await _ejecutar_respuesta_compromiso(
+                    context=context,
+                    chat_id_origen=chat_id,
+                    id_comp=id_comp,
+                    actor=consultor_nombre,
+                    accion=accion_r,
+                    nota=nota_r,
+                )
+                if res_r.get("ok"):
+                    comp_r = res_r.get("compromiso") or {}
+                    reg_estado = str(res_r.get("estado") or "vista")
+                    reg_cliente = comp_r.get("cliente")
+                    reg_modulo = comp_r.get("modulo")
+                    reg_detalle = res_r.get("nota") or comp_r.get("tarea")
+                    await safe_reply(update, res_r["mensaje"], reply_markup=res_r.get("reply_markup"))
+                elif res_r.get("reason") == "already_completed":
+                    reg_estado = "ya_completada"
+                    await safe_reply(update, f"ℹ️ La tarea #{id_comp} ya figuraba como completada.")
+                else:
+                    reg_estado = "no_encontrado"
+                    await safe_reply(update, f"⚠️ No encontré la tarea #{id_comp}.")
 
         elif intencion == "COMPLETAR_COMPROMISO":
             id_comp = int(datos.get("id_compromiso", 0))
@@ -1115,6 +1398,7 @@ async def handle_message(
                 cliente_override=datos.get("cliente"),
                 modulo_override=datos.get("modulo"),
             )
+            reply_markup_comp = None
             if res.get("ok"):
                 reg_estado = "completado"
                 reg_id_ticket = res.get("id_ticket")
@@ -1124,6 +1408,7 @@ async def handle_message(
                 reg_modulo = ticket_ok.get("modulo") or comp_ok.get("modulo")
                 reg_detalle = comp_ok.get("tarea")
                 resp = res["mensaje"]
+                reply_markup_comp = res.get("reply_markup")
             elif res.get("reason") == "already_completed":
                 reg_estado = "ya_completada"
                 comp_prev = res.get("compromiso") or {}
@@ -1134,7 +1419,7 @@ async def handle_message(
             else:
                 reg_estado = "no_encontrado"
                 resp = f"⚠️ No encontré la tarea #{id_comp} o no se pudo actualizar."
-            await safe_reply(update, resp)
+            await safe_reply(update, resp, reply_markup=reply_markup_comp)
 
         elif intencion == "CONSULTAR_AGENDA":
             await responder_agenda(update, context, datos)
@@ -1212,6 +1497,9 @@ async def handle_message(
             )
             await safe_reply(update, respuesta_formateada)
 
+        elif intencion == "CONSULTAR_CONSULTORES":
+            await safe_reply(update, _render_consultores_text())
+
         else:
             resp = ai_service.responder_conversacion_ia(texto_usuario, user_name=consultor_nombre)
             await safe_reply(update, resp)
@@ -1284,8 +1572,67 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error borrando ticket vía callback: {e}")
 
-    elif data.startswith("completar_tarea_"):
-        id_str = data.replace("completar_tarea_", "")
+    elif data.startswith("tarea_vista_") or data.startswith("tarea_proceso_"):
+        es_proceso = data.startswith("tarea_proceso_")
+        id_str = data.replace("tarea_proceso_", "").replace("tarea_vista_", "")
+        try:
+            id_c = int(id_str)
+            user = update.effective_user
+            consultor_db = db.get_consultant_by_telegram_id(user.id) if user else None
+            c_nom = consultor_db["consultor"] if consultor_db else (user.first_name.upper() if user else "EQUIPO")
+            chat_id = update.effective_chat.id if update.effective_chat else None
+            accion = "en_proceso" if es_proceso else "vista"
+
+            res_r = await _ejecutar_respuesta_compromiso(
+                context=context,
+                chat_id_origen=chat_id,
+                id_comp=id_c,
+                actor=c_nom,
+                accion=accion,
+            )
+            if res_r.get("ok"):
+                comp_r = res_r.get("compromiso") or {}
+                db.registrar_pedido_bot(
+                    mensaje_original=f"[Botón {accion} tarea #{id_c}]",
+                    tipo_entrada="boton",
+                    consultor=c_nom,
+                    destinatario=comp_r.get("consultor"),
+                    intencion="RESPONDER_COMPROMISO",
+                    cliente=comp_r.get("cliente"),
+                    modulo=comp_r.get("modulo"),
+                    estado=str(res_r.get("estado") or accion),
+                    id_compromiso=id_c,
+                    detalle_resultado=res_r.get("nota"),
+                    telegram_user_id=user.id if user else None,
+                    telegram_chat_id=chat_id,
+                )
+                try:
+                    await query.edit_message_reply_markup(reply_markup=res_r.get("reply_markup"))
+                except Exception:
+                    pass
+                await safe_reply(update, res_r["mensaje"])
+            elif res_r.get("reason") == "already_completed":
+                await safe_reply(update, f"ℹ️ La tarea #{id_c} ya estaba completada.")
+            else:
+                await safe_reply(update, f"⚠️ No se encontró la tarea #{id_c}.")
+        except Exception as e:
+            logger.error(f"Error respondiendo tarea vía callback: {e}")
+
+    elif data.startswith("tarea_responder_"):
+        id_str = data.replace("tarea_responder_", "")
+        try:
+            id_c = int(id_str)
+            if hasattr(context, "user_data"):
+                context.user_data["esperando_respuesta_tarea_id"] = id_c
+            await safe_reply(
+                update,
+                f"💬 *Escribí o mandá un audio* con tu respuesta para la tarea *#{id_c}* (ej: _'Lo reviso después del mediodía'_).",
+            )
+        except Exception as e:
+            logger.error(f"Error iniciando respuesta de tarea vía callback: {e}")
+
+    elif data.startswith("completar_tarea_") or data.startswith("reintentar_ticket_"):
+        id_str = data.replace("completar_tarea_", "").replace("reintentar_ticket_", "")
         try:
             id_c = int(id_str)
             user = update.effective_user
@@ -1304,7 +1651,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 comp_ok = res.get("compromiso") or {}
                 ticket_ok = res.get("ticket") or {}
                 db.registrar_pedido_bot(
-                    mensaje_original=f"[Botón completar tarea #{id_c}]",
+                    mensaje_original=f"[Botón completar/subir tarea #{id_c}]",
                     tipo_entrada="boton",
                     consultor=c_nom,
                     destinatario=comp_ok.get("consultor"),
@@ -1319,13 +1666,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     telegram_chat_id=chat_id,
                 )
                 curr_text = query.message.text or ""
-                marca_ticket = f" (Listo ✅ Ticket #{id_t})" if id_t else " (Listo ✅)"
-                new_text = curr_text.replace(f"#{id_c}", f"~#{id_c}~{marca_ticket}")
-                try:
-                    await query.edit_message_text(new_text)
-                except Exception:
-                    pass
-                await safe_reply(update, res["mensaje"])
+                if id_t:
+                    marca_ticket = f" (Listo ✅ Ticket #{id_t})"
+                    new_text = curr_text.replace(f"#{id_c}", f"~#{id_c}~{marca_ticket}")
+                    try:
+                        await query.edit_message_text(new_text)
+                    except Exception:
+                        pass
+                await safe_reply(update, res["mensaje"], reply_markup=res.get("reply_markup"))
             elif res.get("reason") == "already_completed":
                 id_t_prev = (res.get("compromiso") or {}).get("id_ticket")
                 extra_t = f" _(Ticket #{id_t_prev})_" if id_t_prev else ""
@@ -1737,6 +2085,12 @@ def main():
         logger.info("Recordatorios y Alarmas programados: Mañana (08:00 hs), Cierre (18:30 hs), Noche (20:30 hs) y Alarmas 15m antes de cada evento.")
 
     logger.info("Iniciando Asistente de Telegram...")
+    try:
+        synced_n = db.sync_local_to_supabase()
+        if synced_n:
+            logger.info(f"Sincronizadas {synced_n} tareas locales pendientes hacia Supabase.")
+    except Exception as e_sync:
+        logger.debug(f"Sync inicial omitido: {e_sync}")
     app.run_polling()
 
 if __name__ == "__main__":
